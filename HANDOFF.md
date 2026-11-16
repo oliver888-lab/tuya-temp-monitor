@@ -22,7 +22,8 @@
 | API (`/api/readings`, `/api/health`) | 完成，示範模式下實測正常 |
 | 網頁 (`public/index.html`，Chart.js 由 CDN 載入) | 已寫好，**尚未在瀏覽器中實際看過畫面** |
 | 塗鴉雲端連線 (`lib/tuya.js`) | 已依官方簽名規則寫好，**尚未用真實金鑰驗證**（金鑰已填好，但撰寫環境的網路連不到塗鴉，沒測成）（批次查詢端點只用假回應測過流程） |
-| 部署到公開網址 | 未做 |
+| Netlify 版 (`netlify/`，見 `NETLIFY.md`) | 已寫好，用 JavaScriptCore 加假塗鴉/假 Blobs 跑過流程測試；**尚未實際部署** |
+| 部署到公開網址 | 決定用 Netlify，待部署 |
 
 零外部套件，Node 18 以上即可執行。
 
