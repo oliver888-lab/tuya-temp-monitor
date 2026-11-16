@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>成型產線溫度監控</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c2430; --muted:#6b7684; --drop:#dc2626; --spike:#d97706; --border:#e3e6ea; --alert-bg:#fef2f2;
+          --s0:#2563eb; --s1:#059669; --s2:#9333ea; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12161c; --card:#1b212a; --text:#e8ecf1; --muted:#93a0b0; --drop:#f87171; --spike:#fbbf24; --border:#2b3440; --alert-bg:#2a1b1e;
+            --s0:#60a5fa; --s1:#34d399; --s2:#c084fc; --accent:#3b82f6; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+  main { max-width: 1320px; margin: 0 auto; padding: 16px 16px 40px; }
+  header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px; }
+  h1 { font-size: 1.2rem; margin: 0; font-weight: 600; }
+  .status { font-size:.85rem; color:var(--muted); }
+  .status.bad { color: var(--drop); font-weight:600; }
+  .banner { display:none; margin-top:12px; padding:8px 12px; border-radius:8px; background:#fef3c7; color:#78350f; font-size:.9rem; }
+  h2 { font-size:1rem; margin:22px 0 8px; font-weight:600; }
+  .hint { font-weight:400; font-size:.8rem; color:var(--muted); margin-left:8px; }
+
+  /* 每條產線：左邊 3 張感測點卡片，右邊 3 個小按鈕 (開啟大曲線圖) */
+  .row { display:flex; gap:10px; align-items:stretch; }
+  .grid { flex:1; min-width:0; display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
+  .side { display:flex; flex-direction:column; gap:6px; justify-content:center; }
+  .btn { border:1px solid var(--border); background:var(--card); color:var(--text); padding:6px 10px; border-radius:8px; cursor:pointer; font-size:.8rem; white-space:nowrap; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  @media (max-width: 860px) {
+    .row { flex-direction:column-reverse; }
+    .side { flex-direction:row; justify-content:flex-start; }
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:12px 14px; }
+  .sensor.alert { border-color: var(--drop); background: var(--alert-bg); }
+  .sensor.off { opacity:.55; }
+  .sensor .top { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+  .sensor .name { font-weight:600; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+  .sensor .flag { font-size:.8rem; color:var(--muted); white-space:nowrap; }
+  .sensor.alert .flag, .sensor .flag.bad { color:var(--drop); font-weight:600; }
+  .sensor .now { font-size:2.4rem; font-weight:600; line-height:1.15; font-variant-numeric: tabular-nums; }
+  .sensor .sub { font-size:.8rem; color:var(--muted); font-variant-numeric: tabular-nums; }
+  .chartbox { position:relative; height:130px; margin-top:8px; }
+
+  table { width:100%; border-collapse:collapse; font-size:.9rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:500; }
+  .empty { color:var(--muted); font-size:.9rem; padding:8px 0; }
+  .scroll { overflow-x:auto; }
+
+  /* 大曲線圖視窗 */
+  dialog { width:min(1200px, 96vw); border:1px solid var(--border); border-radius:14px; padding:16px; background:var(--card); color:var(--text); }
+  dialog::backdrop { background:rgba(0,0,0,.5); }
+  .dhead { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; margin-bottom:8px; }
+  .dhead h3 { margin:0; font-size:1.1rem; flex:1; }
+  .dhead .side { flex-direction:row; }
+  .bigbox { position:relative; height:min(62vh, 560px); }
+  .note { font-size:.8rem; color:var(--muted); margin-top:6px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">成型產線溫度監控</h1>
+    <div class="status" id="status">連線中…</div>
+  </header>
+  <div class="banner" id="banner">示範模式：目前顯示的是假資料，尚未連接塗鴉裝置。</div>
+
+  <div id="lines"></div>
+
+  <h2>異常紀錄<span class="hint">最近 8 小時，最新在前</span></h2>
+  <div class="card scroll">
+    <table id="anomalies" hidden>
+      <thead><tr><th>時間</th><th>產線</th><th>感測點</th><th>類型</th><th>顯示值</th><th>該分鐘最低</th><th>該分鐘最高</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="noanom">沒有異常。</div>
+  </div>
+</main>
+
+<dialog id="big">
+  <div class="dhead">
+    <h3 id="bigTitle"></h3>
+    <div class="side" id="bigRanges"></div>
+    <button class="btn" id="bigClose">✕ 關閉</button>
+  </div>
+  <div class="bigbox"><canvas id="bigChart"></canvas></div>
+  <div class="note" id="bigNote"></div>
+</dialog>
+
+<script>
+const REFRESH_MS = 30000;
+const CARD_HOURS = 8;                 // 卡片上小曲線固定顯示的區間
+const ALERT_WINDOW_MS = 5 * 60000;    // 最近 5 分鐘內有異常 → 卡片標紅
+const RANGES = [[8, '8 小時'], [24, '24 小時'], [168, '7 天']]; // 大曲線圖可選區間
+const cards = {};                     // 感測點 id → 卡片元素與圖表
+const big = { lineId: null, hours: 8, chart: null };
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const pad = (n) => String(n).padStart(2, '0');
+const hm = (t) => { const d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+const full = (t) => { const d = new Date(t); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hm(t); };
+const deg = (v) => (v == null ? '--' : v.toFixed(1) + ' °C');
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const color = (i) => css('--s' + (i % 3));
+// 伺服器回傳的點：[t, 顯示值, 最低, 最高, 異常碼(0 無 / 1 驟降 / 2 驟升)]
+const T = 0, V = 1, MIN = 2, MAX = 3, A = 4;
+
+// 把點轉成 Chart.js 資料；資料中斷處插入 null 讓線斷開
+function lineData(pts, stepMin) {
+  const out = [];
+  pts.forEach((p, i) => {
+    if (i && p[T] - pts[i - 1][T] > stepMin * 150000) out.push({ x: p[T] - 1, y: null });
+    out.push({ x: p[T], y: p[V], p });
+  });
+  return out;
+}
+const marks = (pts, code) => pts.filter((p) => p[A] === code).map((p) => ({ x: p[T], y: p[V], p }));
+const lineSet = (label, c, width) => ({ label, data: [], borderColor: c, backgroundColor: c, borderWidth: width, pointRadius: 0, pointHoverRadius: 3, tension: 0.15, spanGaps: false });
+const triSet = (label, c, rotation, r) => ({ type: 'scatter', label, data: [], backgroundColor: c, borderColor: c, pointStyle: 'triangle', rotation, pointRadius: r, pointHoverRadius: r + 2 });
+const tipLabel = (it) => { const p = it.raw.p; return p ? `${it.dataset.label} ${p[V].toFixed(1)} °C（最低 ${p[MIN].toFixed(1)} – 最高 ${p[MAX].toFixed(1)}）` : ''; };
+
+function makeChart(canvas, datasets, opts) {
+  return new Chart(canvas, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
+      interaction: { mode: 'nearest', intersect: false },
+      scales: {
+        x: { type: 'linear', grid: { display: !!opts.big, color: css('--border') }, ticks: { color: css('--muted'), maxTicksLimit: opts.big ? 12 : 5, callback: (v) => (big.hours > 24 && opts.big ? full(v) : hm(v)) } },
+        y: { grid: { color: css('--border') }, ticks: { color: css('--muted'), maxTicksLimit: opts.big ? 8 : 4, callback: (v) => v + '°' }, grace: '10%' },
+      },
+      plugins: {
+        legend: { display: !!opts.big, labels: { color: css('--text'), usePointStyle: true, filter: (item) => item.datasetIndex < 3 } },
+        tooltip: { callbacks: { title: (items) => full(items[0].raw.x), label: tipLabel } },
+      },
+    },
+  });
+}
+
+function build(d) {
+  $('lines').innerHTML = d.lines.map((line) =>
+    `<h2>${esc(line.name)}</h2><div class="row"><div class="grid">` + line.sensors.map((s, i) =>
+      `<div class="card sensor" id="c-${s.id}">
+         <div class="top"><span class="name"><span class="dot" style="background:var(--s${i % 3})"></span>${esc(s.name)}</span><span class="flag"></span></div>
+         <div class="now">--</div>
+         <div class="sub"></div>
+         <div class="chartbox"><canvas></canvas></div>
+       </div>`).join('') +
+    `</div><div class="side" title="開啟 ${esc(line.name)} 的大曲線圖">` +
+      RANGES.map(([h, label]) => `<button class="btn" data-line="${esc(line.id)}" data-h="${h}">${label}</button>`).join('') +
+    `</div></div>`).join('');
+  for (const line of d.lines) line.sensors.forEach((s, i) => {
+    const el = $('c-' + s.id);
+    const chart = makeChart(el.querySelector('canvas'), [lineSet('溫度', color(i), 1.5), triSet('▼ 驟降', css('--drop'), 180, 6), triSet('▲ 驟升', css('--spike'), 0, 6)], {});
+    cards[s.id] = { el, flag: el.querySelector('.flag'), now: el.querySelector('.now'), sub: el.querySelector('.sub'), chart };
+  });
+  $('bigRanges').innerHTML = RANGES.map(([h, label]) => `<button class="btn" data-h="${h}">${label}</button>`).join('');
+}
+
+function render(d) {
+  if (!Object.keys(cards).length) build(d);
+  $('title').textContent = d.title;
+  document.title = d.title;
+  $('banner').style.display = d.mock ? 'block' : 'none';
+
+  const anomalies = [];
+  let staleCount = 0;
+  for (const line of d.lines) for (const s of line.sensors) {
+    const c = cards[s.id];
+    if (!c) continue;
+    const pts = s.points;
+    const recent = pts.filter((p) => p[A] && d.serverTime - p[T] <= ALERT_WINDOW_MS).pop();
+    c.el.classList.toggle('off', !s.configured);
+    c.el.classList.toggle('alert', !!recent);
+    c.flag.className = 'flag' + (s.stale ? ' bad' : '');
+    c.flag.textContent = !s.configured ? '尚未設定裝置' : s.stale ? '⚠ 資料中斷' : recent ? (recent[A] === 1 ? '▼ 驟降 ' : '▲ 驟升 ') + hm(recent[T]) : '正常';
+    if (s.stale) staleCount++;
+    c.now.textContent = deg(s.latest ? s.latest.v : null);
+    c.sub.textContent = pts.length ? `8 小時 最低 ${Math.min(...pts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...pts.map((p) => p[MAX])).toFixed(1)} °C` : '尚無資料';
+    c.chart.data.datasets[0].data = lineData(pts, d.stepMin);
+    c.chart.data.datasets[1].data = marks(pts, 1);
+    c.chart.data.datasets[2].data = marks(pts, 2);
+    c.chart.options.scales.x.min = d.serverTime - CARD_HOURS * 3600000;
+    c.chart.options.scales.x.max = d.serverTime;
+    c.chart.update();
+    for (const p of pts) if (p[A]) anomalies.push({ p, line: line.name, sensor: s.name });
+  }
+
+  const st = $('status');
+  st.className = 'status' + (staleCount ? ' bad' : '');
+  st.textContent = (staleCount ? `⚠ ${staleCount} 個感測點資料中斷 · ` : '') + '更新於 ' + hm(d.serverTime);
+
+  anomalies.sort((a, b) => b.p[T] - a.p[T]);
+  $('anomalies').hidden = !anomalies.length;
+  $('noanom').hidden = !!anomalies.length;
+  $('anomalies').querySelector('tbody').innerHTML = anomalies.slice(0, 100).map(({ p, line, sensor }) =>
+    `<tr><td>${full(p[T])}</td><td>${esc(line)}</td><td>${esc(sensor)}</td><td>${p[A] === 1 ? '▼ 驟降' : '▲ 驟升'}</td><td>${deg(p[V])}</td><td>${deg(p[MIN])}</td><td>${deg(p[MAX])}</td></tr>`).join('');
+}
+
+// ---- 大曲線圖：一條產線的 3 個感測點畫在同一張圖，各用不同顏色 ----
+function renderBig(d) {
+  const line = d.lines[0];
+  if (!line) return;
+  const label = RANGES.find(([h]) => h === big.hours)[1];
+  $('bigTitle').textContent = `${line.name} — 最近 ${label}`;
+  $('bigNote').textContent = `▼ 驟降　▲ 驟升（三角形顏色對應感測點）　${d.stepMin > 1 ? `此區間每 ${d.stepMin} 分鐘一點，異常仍保留極值` : '每分鐘一點'}`;
+  [...$('bigRanges').children].forEach((b) => b.classList.toggle('on', Number(b.dataset.h) === big.hours));
+  if (!big.chart) {
+    const sets = [];
+    for (let i = 0; i < 3; i++) sets.push(lineSet('', color(i), 2));
+    for (let i = 0; i < 3; i++) sets.push(triSet('', color(i), 180, 7), triSet('', color(i), 0, 7));
+    big.chart = makeChart($('bigChart'), sets, { big: true });
+  }
+  const ds = big.chart.data.datasets;
+  for (let i = 0; i < 3; i++) {
+    const s = line.sensors[i];
+    const pts = s ? s.points : [];
+    ds[i].label = s ? s.name : '';
+    ds[i].data = lineData(pts, d.stepMin);
+    ds[3 + i * 2].label = s ? s.name + ' ▼ 驟降' : '';
+    ds[3 + i * 2].data = marks(pts, 1);
+    ds[4 + i * 2].label = s ? s.name + ' ▲ 驟升' : '';
+    ds[4 + i * 2].data = marks(pts, 2);
+  }
+  big.chart.options.scales.x.min = d.serverTime - big.hours * 3600000;
+  big.chart.options.scales.x.max = d.serverTime;
+  big.chart.update();
+}
+
+async function refreshBig() {
+  if (!big.lineId || !$('big').open) return;
+  try {
+    const r = await fetch(`/api/readings?hours=${big.hours}&line=${encodeURIComponent(big.lineId)}`, { cache: 'no-store' });
+    renderBig(await r.json());
+  } catch (e) { /* 主畫面的狀態列會顯示連線問題 */ }
+}
+
+function openBig(lineId, hours) {
+  big.lineId = lineId;
+  big.hours = hours;
+  if (!$('big').open) $('big').showModal();
+  refreshBig();
+}
+
+$('lines').addEventListener('click', (e) => { const b = e.target.closest('button[data-line]'); if (b) openBig(b.dataset.line, Number(b.dataset.h)); });
+$('bigRanges').addEventListener('click', (e) => { const b = e.target.closest('button[data-h]'); if (b) openBig(big.lineId, Number(b.dataset.h)); });
+$('bigClose').addEventListener('click', () => $('big').close());
+$('big').addEventListener('click', (e) => { if (e.target === $('big')) $('big').close(); }); // 點視窗外關閉
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/readings?hours=' + CARD_HOURS, { cache: 'no-store' });
+    render(await r.json());
+  } catch (e) {
+    $('status').className = 'status bad';
+    $('status').textContent = '⚠ 無法連線到伺服器';
+  }
+  refreshBig();
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

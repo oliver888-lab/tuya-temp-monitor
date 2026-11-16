@@ -1,0 +1,68 @@
+{
+  "_說明": "產線與感測點設定。name 可自由改；deviceId 填塗鴉的 Device ID，留空代表尚未安裝。可選欄位：tempCode、divisor、threshold (覆蓋 .env 的預設)。",
+  "lines": [
+    {
+      "id": "line1",
+      "name": "A1 線",
+      "sensors": [
+        {
+          "id": "line1-s1",
+          "name": "入楦前烘箱",
+          "deviceId": ""
+        },
+        {
+          "id": "line1-s2",
+          "name": "過膠",
+          "deviceId": ""
+        },
+        {
+          "id": "line1-s3",
+          "name": "活化",
+          "deviceId": "a370b732376574a5aeltn4"
+        }
+      ]
+    },
+    {
+      "id": "line2",
+      "name": "A2 線",
+      "sensors": [
+        {
+          "id": "line2-s1",
+          "name": "入楦前烘箱",
+          "deviceId": ""
+        },
+        {
+          "id": "line2-s2",
+          "name": "過膠",
+          "deviceId": ""
+        },
+        {
+          "id": "line2-s3",
+          "name": "活化",
+          "deviceId": ""
+        }
+      ]
+    },
+    {
+      "id": "line3",
+      "name": "A3 線",
+      "sensors": [
+        {
+          "id": "line3-s1",
+          "name": "入楦前烘箱",
+          "deviceId": ""
+        },
+        {
+          "id": "line3-s2",
+          "name": "過膠",
+          "deviceId": ""
+        },
+        {
+          "id": "line3-s3",
+          "name": "活化",
+          "deviceId": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "tuya-temp-monitor",
+  "version": "0.1.0",
+  "description": "塗鴉 (Tuya) 溫度感測器 — 每分鐘即時溫度曲線網頁",
+  "private": true,
+  "main": "server.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "probe": "node scripts/probe.js",
+    "test": "node --test"
+  }
+}
