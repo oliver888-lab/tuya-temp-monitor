@@ -1,6 +1,7 @@
 // 排程函式：每分鐘向塗鴉批次讀取所有感測點，每個感測點寫入一個分鐘點。
 // 只在工廠記錄時段 (07:00 ~ 19:00) 寫入歷史點位；警示時段內判斷上下限 (45~55°C) 與驟變。
-import { getConfig, store, dayKey, readJson, toRow, finalize, evalAnomalyCode, isRecordTime, TuyaClient, pickTemperature, MINUTE } from '../lib/cloud.mjs';
+// 當警示時段內出現異常時：觸發溫度計連續響約 3 聲 (3.5 秒) 後自動消音，並進入 30 分鐘冷卻期；30 分鐘後若仍異常才再響一次。
+import { getConfig, store, dayKey, readJson, toRow, finalize, evalAnomalyCode, isRecordTime, TuyaClient, pickTemperature, pulseDeviceAlarm, MINUTE } from '../lib/cloud.mjs';
 
 export const config = { schedule: '* * * * *' };
 
@@ -13,6 +14,7 @@ export default async () => {
   const now = Date.now();
   const t = Math.floor(now / MINUTE) * MINUTE;
   const inRecordWindow = isRecordTime(t);
+  const cooldownMs = cfg.alarmCooldownMin * 60_000;
 
   const s = store();
   const state = await readJson(s, 'state', {});
@@ -34,6 +36,7 @@ export default async () => {
   const key = dayKey(t);
   const day = inRecordWindow ? await readJson(s, key, {}) : null;
   const at = Date.now();
+  const toAlarm = [];
   for (const sensor of active) {
     const st = (state.sensors[sensor.id] ||= {});
     try {
@@ -50,6 +53,20 @@ export default async () => {
         if (rows.length && rows[rows.length - 1][0] === t) rows[rows.length - 1] = toRow(p, code);
         else rows.push(toRow(p, code));
         st.prev = { t, v: value };
+
+        // 警報觸發與 30 分鐘冷卻判斷：
+        // 若在警示時段內發生異常 (code > 0)，且距離上次響鈴已滿 30 分鐘 → 發送 3.5 秒點放警報
+        if (code > 0) {
+          if (!st.lastAlarmAt || at - st.lastAlarmAt >= cooldownMs) {
+            st.lastAlarmAt = at;
+            st.lastAlarmCode = code;
+            toAlarm.push({ sensor, value });
+          }
+        } else {
+          // 溫度已恢復正常 (45~55°C 且無驟變) → 重置冷卻計時，下次若再發生異常可立即響鈴
+          st.lastAlarmAt = null;
+          st.lastAlarmCode = 0;
+        }
       }
       st.latest = { t: at, v: value };
       st.lastOkAt = at;
@@ -58,6 +75,16 @@ export default async () => {
       if (st.lastError !== err.message) console.error(`${sensor.id} 取樣失敗：${err.message}`);
       st.lastError = err.message;
     }
+  }
+
+  // 對需要響鈴的感測器發送「響 3 聲 (3.5 秒) → 自動消音」指令
+  if (toAlarm.length) {
+    await Promise.allSettled(
+      toAlarm.map(async ({ sensor, value }) => {
+        const log = await pulseDeviceAlarm(tuya, sensor.deviceId, value, sensor.divisor, cfg.alarmPulseMs);
+        state.sensors[sensor.id].lastAlarmLog = log;
+      })
+    );
   }
 
   state.token = tuya.token;

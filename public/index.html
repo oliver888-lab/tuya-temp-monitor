@@ -59,7 +59,12 @@
   .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
   .sensor .flag { font-size:.8rem; color:var(--muted); white-space:nowrap; }
   .sensor.alert .flag, .sensor .flag.bad { color:var(--drop); font-weight:600; }
+  .sensor .now-row { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin:2px 0; }
   .sensor .now { font-size:2.4rem; font-weight:600; line-height:1.15; font-variant-numeric: tabular-nums; }
+  .sensor .alarm-bar { display:flex; gap:4px; align-items:center; flex-wrap:wrap; }
+  .abtn { border:1px solid var(--border); background:var(--bg); color:var(--text); padding:3px 7px; border-radius:6px; cursor:pointer; font-size:.73rem; white-space:nowrap; }
+  .abtn:hover { border-color:var(--accent); }
+  .abtn:disabled { opacity:.5; cursor:wait; }
   .sensor .sub { font-size:.8rem; color:var(--muted); font-variant-numeric: tabular-nums; }
   .chartbox { position:relative; height:135px; margin-top:8px; }
 
@@ -249,7 +254,13 @@ function build(d) {
     `<h2>${esc(line.name)}</h2><div class="row"><div class="grid">` + line.sensors.map((s, i) =>
       `<div class="card sensor" id="c-${s.id}">
          <div class="top"><span class="name"><span class="dot" style="background:var(--s${i % 3})"></span>${esc(s.name)}</span><span class="flag"></span></div>
-         <div class="now">--</div>
+         <div class="now-row">
+           <div class="now">--</div>
+           <div class="alarm-bar" ${s.configured ? '' : 'hidden'}>
+             <button class="abtn" data-alarm="beep" data-sensor="${esc(s.id)}" title="讓現場溫度計連續響 3 聲 (約 3.5 秒) 後自動停，並進入 30 分鐘冷卻">🔔 響3聲</button>
+             <button class="abtn" data-alarm="mute" data-sensor="${esc(s.id)}" title="強制解除現場溫度計警報並靜音 30 分鐘">🔕 靜音</button>
+           </div>
+         </div>
          <div class="sub"></div>
          <div class="chartbox"><canvas></canvas></div>
        </div>`).join('') +
@@ -361,11 +372,15 @@ function render(d) {
 
     // 卡片小圖只畫 07:30 ~ 18:00 之間的點位
     const cardPts = pts.filter((p) => p[T] >= cardMinX && p[T] <= cardMaxX);
-    c.sub.textContent = cardPts.length
+    const coolMin = s.alarmCooldownMin || 30;
+    const alarmNote = s.lastAlarmAt && d.serverTime - s.lastAlarmAt < coolMin * 60000
+      ? ` · 🔔 ${hm(s.lastAlarmAt)} 已響 (${coolMin}分後再提醒)`
+      : '';
+    c.sub.textContent = (cardPts.length
       ? `07:30~18:00 最低 ${Math.min(...cardPts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...cardPts.map((p) => p[MAX])).toFixed(1)} °C`
       : pts.length
       ? `今日 最低 ${Math.min(...pts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...pts.map((p) => p[MAX])).toFixed(1)} °C`
-      : '今日尚無資料 (07:00 開始記錄)';
+      : '今日尚無資料 (07:00 開始記錄)') + alarmNote;
 
     c.chart.options.plugins.limitLines.minTemp = s.minTemp ?? minT;
     c.chart.options.plugins.limitLines.maxTemp = s.maxTemp ?? maxT;
@@ -444,7 +459,25 @@ function openBig(lineId, range) {
   refreshBig();
 }
 
-$('lines').addEventListener('click', (e) => {
+$('lines').addEventListener('click', async (e) => {
+  const ab = e.target.closest('button[data-alarm]');
+  if (ab) {
+    const action = ab.dataset.alarm;
+    const sensor = ab.dataset.sensor;
+    const oldText = ab.textContent;
+    ab.disabled = true;
+    ab.textContent = action === 'beep' ? '發送中…' : '靜音中…';
+    try {
+      const r = await fetch(`/api/alarm?sensor=${encodeURIComponent(sensor)}&action=${encodeURIComponent(action)}`, { cache: 'no-store' });
+      const res = await r.json();
+      ab.textContent = res.ok ? (action === 'beep' ? '✓ 已響3聲' : '✓ 已靜音') : '失敗';
+      setTimeout(() => { ab.textContent = oldText; ab.disabled = false; refresh(); }, 2000);
+    } catch (err) {
+      ab.textContent = '連線失敗';
+      setTimeout(() => { ab.textContent = oldText; ab.disabled = false; }, 2000);
+    }
+    return;
+  }
   const b = e.target.closest('button[data-line]');
   if (b) openBig(b.dataset.line, b.dataset.range);
 });

@@ -6,7 +6,7 @@ import tuyaLib from '../../lib/tuya.js';
 import mockLib from '../../lib/mock.js';
 
 export const { finalize, downsample, MinuteAggregator, MINUTE } = aggregateLib;
-export const { TuyaClient, pickTemperature } = tuyaLib;
+export const { TuyaClient, pickTemperature, pulseDeviceAlarm, muteDeviceAlarm } = tuyaLib;
 export const { mockValue } = mockLib;
 
 const env = (k) => (typeof Netlify !== 'undefined' ? Netlify.env.get(k) : process.env[k]) ?? '';
@@ -61,6 +61,8 @@ export function getConfig() {
     threshold: num('ANOMALY_THRESHOLD_C', 1.0),
     minTemp: num('TEMP_MIN_C', 45),
     maxTemp: num('TEMP_MAX_C', 55),
+    alarmCooldownMin: num('ALARM_COOLDOWN_MIN', 30), // 異常響完一次後，間隔幾分鐘才再響一次 (預設 30 分鐘)
+    alarmPulseMs: num('ALARM_PULSE_MS', 3500),       // 每次觸發警報維持幾毫秒後自動消音 (預設 3.5 秒 ≈ 響 3 聲)
     tzOffsetMin: TZ_OFFSET_MIN,
     retainDays: num('RETAIN_DAYS', 30),
     adminKey: env('ADMIN_KEY'),

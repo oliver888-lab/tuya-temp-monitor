@@ -79,10 +79,11 @@ export default async (req) => {
       id: line.id,
       name: line.name,
       sensors: line.sensors.map((sensor) => {
-        let pts, latest, stale;
+        let pts, latest, stale, lastAlarmAt;
         if (cfg.mock) {
           ({ pts, latest } = mockPoints(indexOf.get(sensor.id), since, until, now, sensor.threshold));
           stale = false;
+          lastAlarmAt = null;
         } else {
           pts = days
             .flatMap((d) => d[sensor.id] || [])
@@ -91,6 +92,7 @@ export default async (req) => {
           const st = state.sensors[sensor.id] || {};
           latest = st.latest || null;
           stale = !!sensor.deviceId && (!st.lastOkAt || now - st.lastOkAt > STALE_MS);
+          lastAlarmAt = st.lastAlarmAt || null;
         }
         const ds = stepMin > 1 ? downsample(pts, stepMin * MINUTE) : pts;
         return {
@@ -102,6 +104,8 @@ export default async (req) => {
           configured: cfg.mock || !!sensor.deviceId,
           stale,
           latest,
+          lastAlarmAt,
+          alarmCooldownMin: cfg.alarmCooldownMin,
           points: ds.map((p) => compact(p, sensor)),
         };
       }),

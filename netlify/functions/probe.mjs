@@ -36,6 +36,11 @@ export default async (req) => {
     } catch (err) {
       row.infoError = err.message;
     }
+    try {
+      row.specifications = await tuya.getSpecifications(s.deviceId);
+    } catch (err) {
+      row.specError = err.message;
+    }
     out.sensors.push(row);
   }
   try {
