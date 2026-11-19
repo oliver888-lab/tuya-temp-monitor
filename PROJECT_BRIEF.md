@@ -21,11 +21,11 @@
 - [ ] 用真實金鑰驗證塗鴉連線（`npm run probe`）
 - [ ] 確認感測器上報頻率與 API 額度
 - [x] 改寫成 Netlify 版（網頁 + 排程函式 + Netlify Blobs，見 `NETLIFY.md`）；Node 版保留
-- [ ] 部署到 Netlify 並用 `/api/probe` 驗證
+- [x] 部署到 Netlify 並用 `/api/probe` 驗證（`https://sgv-temp-morniter.netlify.app`）
 
 ## 待補資料
 - 其餘 8 個感測點的 Device ID 與位置（目前只有 A1 線「活化」一台，型號 SNT957W-TDE）
-- `npm run probe` 的輸出（確認溫度代碼與換算倍率）
+- [已確認] 溫度代碼 `va_temperature`、換算倍率 `10`（原始值 260 = 26.0 °C）、批次查詢端點可用
 - 異常門檻、部署位置、資料保留天數
 
 ## 合作方式
