@@ -210,10 +210,7 @@ function lineData(pts, stepMin) {
   });
   return out;
 }
-const marksLow = (pts) => pts.filter((p) => isLowCode(p[A])).map((p) => ({ x: p[T], y: p[V], p }));
-const marksHigh = (pts) => pts.filter((p) => isHighCode(p[A])).map((p) => ({ x: p[T], y: p[V], p }));
-const lineSet = (label, c, width) => ({ label, data: [], borderColor: c, backgroundColor: c, borderWidth: width, pointRadius: 0, pointHoverRadius: 3, tension: 0.15, spanGaps: false });
-const triSet = (label, c, rotation, r) => ({ type: 'scatter', label, data: [], backgroundColor: c, borderColor: c, pointStyle: 'triangle', rotation, pointRadius: r, pointHoverRadius: r + 2 });
+const lineSet = (label, c, width) => ({ label, data: [], borderColor: c, backgroundColor: c, borderWidth: width, pointRadius: 0, pointHoverRadius: 4, tension: 0.15, spanGaps: false });
 const tipLabel = (it) => { const p = it.raw.p; return p ? `${it.dataset.label} ${p[V].toFixed(1)} °C（${anomText(p[A])}，最低 ${p[MIN].toFixed(1)} – 最高 ${p[MAX].toFixed(1)}）` : ''; };
 
 function makeChart(canvas, datasets, opts) {
@@ -269,11 +266,7 @@ function build(d) {
     `</div></div>`).join('');
   for (const line of d.lines) line.sensors.forEach((s, i) => {
     const el = $('c-' + s.id);
-    const chart = makeChart(el.querySelector('canvas'), [
-      lineSet('溫度', color(i), 1.5),
-      triSet('▼ 過低/驟降', css('--drop'), 180, 6),
-      triSet('▲ 過高/驟升', css('--spike'), 0, 6),
-    ], {});
+    const chart = makeChart(el.querySelector('canvas'), [lineSet('溫度', color(i), 1.8)], {});
     cards[s.id] = { el, flag: el.querySelector('.flag'), now: el.querySelector('.now'), sub: el.querySelector('.sub'), chart };
   });
   $('bigRanges').innerHTML = RANGES.map(([r, label]) => `<button class="btn" data-range="${r}">${label}</button>`).join('');
@@ -385,8 +378,6 @@ function render(d) {
     c.chart.options.plugins.limitLines.minTemp = s.minTemp ?? minT;
     c.chart.options.plugins.limitLines.maxTemp = s.maxTemp ?? maxT;
     c.chart.data.datasets[0].data = lineData(cardPts, d.stepMin);
-    c.chart.data.datasets[1].data = marksLow(cardPts);
-    c.chart.data.datasets[2].data = marksHigh(cardPts);
     c.chart.options.scales.x.min = cardMinX;
     c.chart.options.scales.x.max = cardMaxX;
     c.chart.update();
@@ -418,12 +409,11 @@ function renderBig(d) {
   const minT = d.minTemp ?? 45;
   const maxT = d.maxTemp ?? 55;
   $('bigTitle').textContent = `${line.name} — ${rItem[1]}（07:00 ~ 19:00）`;
-  $('bigNote').textContent = `紅虛線：標準範圍 ${minT}~${maxT}°C　｜　警示時段：07:30~11:20、12:30~18:30　｜　▼ 過低/驟降　▲ 過高/驟升　（${d.stepMin > 1 ? `每 ${d.stepMin} 分鐘一點，保留異常極值` : '每分鐘一點'}）`;
+  $('bigNote').textContent = `紅虛線：標準範圍 ${minT}~${maxT}°C　｜　警示時段：07:30~11:20、12:30~18:30　｜　滑鼠移到曲線上可查看每分鐘溫度與狀態（${d.stepMin > 1 ? `每 ${d.stepMin} 分鐘一點` : '每分鐘一點'}）`;
   [...$('bigRanges').children].forEach((b) => b.classList.toggle('on', b.dataset.range === big.range));
   if (!big.chart) {
     const sets = [];
     for (let i = 0; i < 3; i++) sets.push(lineSet('', color(i), 2));
-    for (let i = 0; i < 3; i++) sets.push(triSet('', color(i), 180, 7), triSet('', color(i), 0, 7));
     big.chart = makeChart($('bigChart'), sets, { big: true });
   }
   big.chart.options.plugins.limitLines.minTemp = minT;
@@ -434,10 +424,6 @@ function renderBig(d) {
     const pts = s ? s.points : [];
     ds[i].label = s ? s.name : '';
     ds[i].data = lineData(pts, d.stepMin);
-    ds[3 + i * 2].label = s ? s.name + ' ▼ 過低/驟降' : '';
-    ds[3 + i * 2].data = marksLow(pts);
-    ds[4 + i * 2].label = s ? s.name + ' ▲ 過高/驟升' : '';
-    ds[4 + i * 2].data = marksHigh(pts);
   }
   big.chart.options.scales.x.min = d.since;
   big.chart.options.scales.x.max = d.until;
