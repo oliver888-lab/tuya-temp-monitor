@@ -36,8 +36,22 @@ if (cfg.mock) {
   for (const s of sensors) for (let ts = start; ts < now; ts += 30_000) s.agg.add(ts, mockValue(ts, s.index));
 }
 
+const DAY = 86_400_000;
+const tzMs = (cfg.tzOffsetMin ?? 420) * 60_000;
+const localDayStart = (ts) => Math.floor((ts + tzMs) / DAY) * DAY - tzMs;
+const localMinOfDay = (ts) => Math.floor(((ts + tzMs) % DAY) / MINUTE);
+const isRecordTime = (ts) => { const m = localMinOfDay(ts); return m >= 420 && m <= 1140; };
+const isAlertTime = (ts) => { const m = localMinOfDay(ts); return (m >= 450 && m <= 680) || (m >= 750 && m <= 1110); };
+
+function evalAnomalyCode(t, v, rawAnomaly, s) {
+  if (!isAlertTime(t)) return 0;
+  if (v < s.minTemp) return 3;
+  if (v > s.maxTemp) return 4;
+  return rawAnomaly === 'drop' ? 1 : rawAnomaly === 'spike' ? 2 : 0;
+}
+
 function record(s, now, value) {
-  s.agg.add(now, value);
+  if (isRecordTime(now)) s.agg.add(now, value);
   s.latest = { t: now, v: value };
   s.lastOkAt = now;
   s.lastError = null;
@@ -80,20 +94,43 @@ function sendJson(res, code, body) {
   res.end(JSON.stringify(body));
 }
 
-// 點的精簡格式：[t, 顯示值, 該分鐘最低, 該分鐘最高, 異常碼]，異常碼 0=無 1=驟降 2=驟升
-const compact = (p) => [p.t, p.v, p.min, p.max, p.anomaly === 'drop' ? 1 : p.anomaly === 'spike' ? 2 : 0];
+// 點的精簡格式：[t, 顯示值, 該分鐘最低, 該分鐘最高, 異常碼]，異常碼 0=無 1=驟降 2=驟升 3=過低 4=過高
+const compact = (p, s) => [p.t, p.v, p.min, p.max, evalAnomalyCode(p.t, p.v, p.anomaly, s)];
 const staleAfter = Math.max(3 * cfg.pollSec * 1000, 180_000);
 
-// 超過 24 小時的區間改為每 5 分鐘一點，避免一次傳太多資料
-function readings(hours, lineId) {
+function resolveWindow(url, now) {
+  const range = url.searchParams.get('range') || '';
+  const today0 = localDayStart(now);
+  if (range === 'today') return { range: 'today', since: today0 + 7 * 3600_000, until: today0 + 19 * 3600_000, hours: 12, stepMin: 1 };
+  if (range === 'yesterday') {
+    const y0 = today0 - DAY;
+    return { range: 'yesterday', since: y0 + 7 * 3600_000, until: y0 + 19 * 3600_000, hours: 12, stepMin: 1 };
+  }
+  if (range === 'week') {
+    const d = new Date(today0 + 12 * 3600_000);
+    const dow = (d.getUTCDay() + 6) % 7;
+    const mon0 = today0 - dow * DAY;
+    return { range: 'week', since: mon0 + 7 * 3600_000, until: mon0 + 6 * DAY + 19 * 3600_000, hours: 168, stepMin: 5 };
+  }
+  const hours = Math.min(Math.max(Number(url.searchParams.get('hours')) || 24, 0.25), Math.min(cfg.retainDays * 24, 168));
+  return { range: '', since: now - hours * 3600_000, until: now, hours, stepMin: hours > 24 ? 5 : 1 };
+}
+
+function readings(url) {
   const now = Date.now();
-  const since = now - hours * 3600_000;
-  const stepMin = hours > 24 ? 5 : 1;
+  const { range, since, until, hours, stepMin } = resolveWindow(url, now);
+  const lineId = url.searchParams.get('line');
   return {
     title: cfg.title,
     mock: cfg.mock,
     pollSec: cfg.pollSec,
     serverTime: now,
+    tzOffsetMin: cfg.tzOffsetMin,
+    minTemp: cfg.minTemp,
+    maxTemp: cfg.maxTemp,
+    range,
+    since,
+    until,
     hours,
     stepMin,
     lines: cfg.lines.filter((line) => !lineId || line.id === lineId).map((line) => ({
@@ -102,15 +139,17 @@ function readings(hours, lineId) {
       sensors: line.sensors.map((s) => {
         const configured = cfg.mock || !!s.deviceId;
         const cur = s.agg.peek();
-        const pts = s.store.since(since).concat(cur ? [cur] : []); // 最後一點可能是進行中的這一分鐘 (暫定)
+        const pts = s.store.since(since).concat(cur ? [cur] : []).filter((p) => p.t >= since && p.t <= until && isRecordTime(p.t));
         return {
           id: s.id,
           name: s.name,
           threshold: s.threshold,
+          minTemp: s.minTemp,
+          maxTemp: s.maxTemp,
           configured,
           stale: configured && (!s.lastOkAt || now - s.lastOkAt > staleAfter),
           latest: s.latest,
-          points: (stepMin > 1 ? downsample(pts, stepMin * MINUTE) : pts).map(compact),
+          points: (stepMin > 1 ? downsample(pts, stepMin * MINUTE) : pts).map((p) => compact(p, s)),
         };
       }),
     })),
@@ -125,8 +164,7 @@ const server = http.createServer((req, res) => {
   if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
 
   if (url.pathname === '/api/readings') {
-    const hours = Math.min(Math.max(Number(url.searchParams.get('hours')) || 8, 0.25), Math.min(cfg.retainDays * 24, 168));
-    return sendJson(res, 200, readings(hours, url.searchParams.get('line')));
+    return sendJson(res, 200, readings(url));
   }
 
   if (url.pathname === '/api/health') {

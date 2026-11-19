@@ -7,27 +7,43 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --text:#1c2430; --muted:#6b7684; --drop:#dc2626; --spike:#d97706; --border:#e3e6ea; --alert-bg:#fef2f2;
-          --s0:#2563eb; --s1:#059669; --s2:#9333ea; --accent:#2563eb; }
+          --s0:#2563eb; --s1:#059669; --s2:#9333ea; --accent:#2563eb; --limit:#ef4444; }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#12161c; --card:#1b212a; --text:#e8ecf1; --muted:#93a0b0; --drop:#f87171; --spike:#fbbf24; --border:#2b3440; --alert-bg:#2a1b1e;
-            --s0:#60a5fa; --s1:#34d399; --s2:#c084fc; --accent:#3b82f6; }
+            --s0:#60a5fa; --s1:#34d399; --s2:#c084fc; --accent:#3b82f6; --limit:#f87171; }
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
   main { max-width: 1320px; margin: 0 auto; padding: 16px 16px 40px; }
   header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px; }
   h1 { font-size: 1.2rem; margin: 0; font-weight: 600; }
+  .rules { font-size:.8rem; color:var(--muted); margin-top:4px; }
   .status { font-size:.85rem; color:var(--muted); }
   .status.bad { color: var(--drop); font-weight:600; }
   .banner { display:none; margin-top:12px; padding:8px 12px; border-radius:8px; background:#fef3c7; color:#78350f; font-size:.9rem; }
+
+  /* 上方異常跑馬燈 */
+  .ticker { display:flex; align-items:center; gap:10px; margin-top:12px; padding:8px 12px; border-radius:10px; border:1px solid var(--border); background:var(--card); overflow:hidden; }
+  .ticker.has-alert { border-color:var(--drop); background:var(--alert-bg); }
+  .ticker-badge { font-size:.78rem; font-weight:600; padding:3px 8px; border-radius:6px; white-space:nowrap; background:#e5e7eb; color:#374151; }
+  .ticker.has-alert .ticker-badge { background:var(--drop); color:#fff; }
+  .ticker-viewport { flex:1; overflow:hidden; white-space:nowrap; position:relative; }
+  .ticker-track { display:inline-block; white-space:nowrap; }
+  .ticker.has-alert .ticker-track { padding-left:100%; animation: marquee 28s linear infinite; }
+  .ticker.has-alert:hover .ticker-track { animation-play-state: paused; }
+  .ticker-item { display:inline-block; margin-right:28px; font-size:.88rem; color:var(--drop); font-weight:600; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+  .ticker-item:hover { opacity:.8; }
+  .ticker-ok { font-size:.85rem; color:var(--muted); }
+  @keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-100%); } }
+
   h2 { font-size:1rem; margin:22px 0 8px; font-weight:600; }
   .hint { font-weight:400; font-size:.8rem; color:var(--muted); margin-left:8px; }
 
-  /* 每條產線：左邊 3 張感測點卡片，右邊 3 個小按鈕 (開啟大曲線圖) */
+  /* 每條產線：左邊 3 張感測點卡片，右邊 3 個小按鈕 (今日/昨日/本週) */
   .row { display:flex; gap:10px; align-items:stretch; }
   .grid { flex:1; min-width:0; display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
   .side { display:flex; flex-direction:column; gap:6px; justify-content:center; }
-  .btn { border:1px solid var(--border); background:var(--card); color:var(--text); padding:6px 10px; border-radius:8px; cursor:pointer; font-size:.8rem; white-space:nowrap; }
+  .btn { border:1px solid var(--border); background:var(--card); color:var(--text); padding:6px 12px; border-radius:8px; cursor:pointer; font-size:.82rem; white-space:nowrap; }
   .btn:hover { border-color:var(--accent); }
   .btn.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   @media (max-width: 860px) {
@@ -46,11 +62,13 @@
   .sensor.alert .flag, .sensor .flag.bad { color:var(--drop); font-weight:600; }
   .sensor .now { font-size:2.4rem; font-weight:600; line-height:1.15; font-variant-numeric: tabular-nums; }
   .sensor .sub { font-size:.8rem; color:var(--muted); font-variant-numeric: tabular-nums; }
-  .chartbox { position:relative; height:130px; margin-top:8px; }
+  .chartbox { position:relative; height:135px; margin-top:8px; }
 
   table { width:100%; border-collapse:collapse; font-size:.9rem; font-variant-numeric: tabular-nums; }
   th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); }
   th { color:var(--muted); font-weight:500; }
+  tbody tr.clickable { cursor:pointer; }
+  tbody tr.clickable:hover { background:rgba(37,99,235,.06); }
   .empty { color:var(--muted); font-size:.9rem; padding:8px 0; }
   .scroll { overflow-x:auto; }
 
@@ -67,20 +85,31 @@
 <body>
 <main>
   <header>
-    <h1 id="title">成型產線溫度監控</h1>
+    <div>
+      <h1 id="title">成型產線溫度監控</h1>
+      <div class="rules" id="rules">標準範圍 45.0 ~ 55.0 °C（紅虛線） · 記錄時段 07:00~19:00 · 警示時段 07:30~11:20、12:30~18:30</div>
+    </div>
     <div class="status" id="status">連線中…</div>
   </header>
   <div class="banner" id="banner">示範模式：目前顯示的是假資料，尚未連接塗鴉裝置。</div>
 
+  <!-- 異常跑馬燈：點擊任一筆可直接跳出對應產線的歷史大圖 -->
+  <div class="ticker" id="ticker">
+    <span class="ticker-badge" id="tickerBadge">正常</span>
+    <div class="ticker-viewport">
+      <div class="ticker-track" id="tickerTrack"><span class="ticker-ok">目前警示時段內無溫度異常</span></div>
+    </div>
+  </div>
+
   <div id="lines"></div>
 
-  <h2>異常紀錄<span class="hint">最近 8 小時，最新在前</span></h2>
+  <h2>異常紀錄<span class="hint">僅列警示時段 (07:30~11:20、12:30~18:30) 內超出 45~55°C 或驟變，點擊可看曲線圖</span></h2>
   <div class="card scroll">
     <table id="anomalies" hidden>
-      <thead><tr><th>時間</th><th>產線</th><th>感測點</th><th>類型</th><th>顯示值</th><th>該分鐘最低</th><th>該分鐘最高</th></tr></thead>
+      <thead><tr><th>時間</th><th>產線</th><th>感測點</th><th>異常原因</th><th>顯示值</th><th>該分鐘最低</th><th>該分鐘最高</th></tr></thead>
       <tbody></tbody>
     </table>
-    <div class="empty" id="noanom">沒有異常。</div>
+    <div class="empty" id="noanom">今日警示時段內尚無異常。</div>
   </div>
 </main>
 
@@ -96,11 +125,12 @@
 
 <script>
 const REFRESH_MS = 30000;
-const CARD_HOURS = 8;                 // 卡片上小曲線固定顯示的區間
 const ALERT_WINDOW_MS = 5 * 60000;    // 最近 5 分鐘內有異常 → 卡片標紅
-const RANGES = [[8, '8 小時'], [24, '24 小時'], [168, '7 天']]; // 大曲線圖可選區間
+const RANGES = [['today', '今日'], ['yesterday', '昨日'], ['week', '本週']];
 const cards = {};                     // 感測點 id → 卡片元素與圖表
-const big = { lineId: null, hours: 8, chart: null };
+const big = { lineId: null, range: 'today', chart: null, focusTs: null };
+let latestData = null;
+
 const $ = (id) => document.getElementById(id);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const pad = (n) => String(n).padStart(2, '0');
@@ -109,8 +139,62 @@ const full = (t) => { const d = new Date(t); return (d.getMonth() + 1) + '/' + d
 const deg = (v) => (v == null ? '--' : v.toFixed(1) + ' °C');
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const color = (i) => css('--s' + (i % 3));
-// 伺服器回傳的點：[t, 顯示值, 最低, 最高, 異常碼(0 無 / 1 驟降 / 2 驟升)]
+
+// 伺服器回傳的點：[t, 顯示值, 最低, 最高, 異常碼(0 無 / 1 驟降 / 2 驟升 / 3 低於45°C / 4 高於55°C)]
 const T = 0, V = 1, MIN = 2, MAX = 3, A = 4;
+const isLowCode = (c) => c === 1 || c === 3;
+const isHighCode = (c) => c === 2 || c === 4;
+function anomText(code, minT = 45, maxT = 55) {
+  if (code === 3) return `▼ 過低 (<${minT}°C)`;
+  if (code === 4) return `▲ 過高 (>${maxT}°C)`;
+  if (code === 1) return '▼ 驟降';
+  if (code === 2) return '▲ 驟升';
+  return '正常';
+}
+
+// 計算某天在工廠時區 (預設 UTC+7) 的指定時:分毫秒時間戳
+function dayClock(baseTs, tzOffsetMin, hour, min) {
+  const tzMs = (tzOffsetMin ?? 420) * 60000;
+  const day0 = Math.floor((baseTs + tzMs) / 86400000) * 86400000 - tzMs;
+  return day0 + (hour * 60 + min) * 60000;
+}
+
+// 判斷時間戳是否在警示時段 (07:30~11:20 或 12:30~18:30)
+function isAlertClock(ts, tzOffsetMin) {
+  const tzMs = (tzOffsetMin ?? 420) * 60000;
+  const m = Math.floor(((ts + tzMs) % 86400000) / 60000);
+  return (m >= 450 && m <= 680) || (m >= 750 && m <= 1110);
+}
+
+// Chart.js 外掛：在圖表畫出 45°C 下限與 55°C 上限紅色虛線
+const limitLinesPlugin = {
+  id: 'limitLines',
+  afterDraw(chart) {
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea || !scales.y) return;
+    const minT = chart.options.plugins.limitLines?.minTemp ?? 45;
+    const maxT = chart.options.plugins.limitLines?.maxTemp ?? 55;
+    const isBig = !!chart.options.plugins.limitLines?.big;
+    ctx.save();
+    ctx.strokeStyle = css('--limit') || '#ef4444';
+    ctx.fillStyle = css('--limit') || '#ef4444';
+    ctx.lineWidth = isBig ? 1.5 : 1;
+    ctx.setLineDash([5, 4]);
+    ctx.font = (isBig ? '12px ' : '10px ') + 'system-ui, sans-serif';
+    for (const [val, label] of [[maxT, `上限 ${maxT}°C`], [minT, `下限 ${minT}°C`]]) {
+      const y = scales.y.getPixelForValue(val);
+      if (y >= chartArea.top && y <= chartArea.bottom) {
+        ctx.beginPath();
+        ctx.moveTo(chartArea.left, y);
+        ctx.lineTo(chartArea.right, y);
+        ctx.stroke();
+        if (isBig) ctx.fillText(label, chartArea.right - 62, y - 5);
+      }
+    }
+    ctx.restore();
+  },
+};
+Chart.register(limitLinesPlugin);
 
 // 把點轉成 Chart.js 資料；資料中斷處插入 null 讓線斷開
 function lineData(pts, stepMin) {
@@ -121,10 +205,11 @@ function lineData(pts, stepMin) {
   });
   return out;
 }
-const marks = (pts, code) => pts.filter((p) => p[A] === code).map((p) => ({ x: p[T], y: p[V], p }));
+const marksLow = (pts) => pts.filter((p) => isLowCode(p[A])).map((p) => ({ x: p[T], y: p[V], p }));
+const marksHigh = (pts) => pts.filter((p) => isHighCode(p[A])).map((p) => ({ x: p[T], y: p[V], p }));
 const lineSet = (label, c, width) => ({ label, data: [], borderColor: c, backgroundColor: c, borderWidth: width, pointRadius: 0, pointHoverRadius: 3, tension: 0.15, spanGaps: false });
 const triSet = (label, c, rotation, r) => ({ type: 'scatter', label, data: [], backgroundColor: c, borderColor: c, pointStyle: 'triangle', rotation, pointRadius: r, pointHoverRadius: r + 2 });
-const tipLabel = (it) => { const p = it.raw.p; return p ? `${it.dataset.label} ${p[V].toFixed(1)} °C（最低 ${p[MIN].toFixed(1)} – 最高 ${p[MAX].toFixed(1)}）` : ''; };
+const tipLabel = (it) => { const p = it.raw.p; return p ? `${it.dataset.label} ${p[V].toFixed(1)} °C（${anomText(p[A])}，最低 ${p[MIN].toFixed(1)} – 最高 ${p[MAX].toFixed(1)}）` : ''; };
 
 function makeChart(canvas, datasets, opts) {
   return new Chart(canvas, {
@@ -134,10 +219,25 @@ function makeChart(canvas, datasets, opts) {
       responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
       interaction: { mode: 'nearest', intersect: false },
       scales: {
-        x: { type: 'linear', grid: { display: !!opts.big, color: css('--border') }, ticks: { color: css('--muted'), maxTicksLimit: opts.big ? 12 : 5, callback: (v) => (big.hours > 24 && opts.big ? full(v) : hm(v)) } },
-        y: { grid: { color: css('--border') }, ticks: { color: css('--muted'), maxTicksLimit: opts.big ? 8 : 4, callback: (v) => v + '°' }, grace: '10%' },
+        x: {
+          type: 'linear',
+          grid: { display: !!opts.big, color: css('--border') },
+          ticks: {
+            color: css('--muted'),
+            maxTicksLimit: opts.big ? 13 : 6,
+            callback: (v) => (big.range === 'week' && opts.big ? full(v) : hm(v)),
+          },
+        },
+        y: {
+          suggestedMin: 40,
+          suggestedMax: 60,
+          grid: { color: css('--border') },
+          ticks: { color: css('--muted'), maxTicksLimit: opts.big ? 8 : 5, callback: (v) => v + '°' },
+          grace: '8%',
+        },
       },
       plugins: {
+        limitLines: { minTemp: 45, maxTemp: 55, big: !!opts.big },
         legend: { display: !!opts.big, labels: { color: css('--text'), usePointStyle: true, filter: (item) => item.datasetIndex < 3 } },
         tooltip: { callbacks: { title: (items) => full(items[0].raw.x), label: tipLabel } },
       },
@@ -155,21 +255,53 @@ function build(d) {
          <div class="chartbox"><canvas></canvas></div>
        </div>`).join('') +
     `</div><div class="side" title="開啟 ${esc(line.name)} 的大曲線圖">` +
-      RANGES.map(([h, label]) => `<button class="btn" data-line="${esc(line.id)}" data-h="${h}">${label}</button>`).join('') +
+      RANGES.map(([r, label]) => `<button class="btn" data-line="${esc(line.id)}" data-range="${r}">${label}</button>`).join('') +
     `</div></div>`).join('');
   for (const line of d.lines) line.sensors.forEach((s, i) => {
     const el = $('c-' + s.id);
-    const chart = makeChart(el.querySelector('canvas'), [lineSet('溫度', color(i), 1.5), triSet('▼ 驟降', css('--drop'), 180, 6), triSet('▲ 驟升', css('--spike'), 0, 6)], {});
+    const chart = makeChart(el.querySelector('canvas'), [
+      lineSet('溫度', color(i), 1.5),
+      triSet('▼ 過低/驟降', css('--drop'), 180, 6),
+      triSet('▲ 過高/驟升', css('--spike'), 0, 6),
+    ], {});
     cards[s.id] = { el, flag: el.querySelector('.flag'), now: el.querySelector('.now'), sub: el.querySelector('.sub'), chart };
   });
-  $('bigRanges').innerHTML = RANGES.map(([h, label]) => `<button class="btn" data-h="${h}">${label}</button>`).join('');
+  $('bigRanges').innerHTML = RANGES.map(([r, label]) => `<button class="btn" data-range="${r}">${label}</button>`).join('');
+}
+
+function renderTicker(anomalies, minT, maxT) {
+  const box = $('ticker');
+  const badge = $('tickerBadge');
+  const track = $('tickerTrack');
+  if (!anomalies.length) {
+    box.classList.remove('has-alert');
+    badge.textContent = '正常';
+    track.innerHTML = '<span class="ticker-ok">目前今日警示時段 (07:30~11:20、12:30~18:30) 內無溫度異常</span>';
+    return;
+  }
+  box.classList.add('has-alert');
+  badge.textContent = `⚠ 異常 (${anomalies.length})`;
+  track.innerHTML = anomalies.slice(0, 20).map(({ p, lineId, line, sensor }) =>
+    `<span class="ticker-item" data-line="${esc(lineId)}" data-ts="${p[T]}" title="點擊查看 ${esc(line)} 歷史曲線">` +
+      `[${hm(p[T])}] ${esc(line)} - ${esc(sensor)}：${anomText(p[A], minT, maxT)} (${p[V].toFixed(1)}°C)` +
+    `</span>`
+  ).join('');
 }
 
 function render(d) {
+  latestData = d;
   if (!Object.keys(cards).length) build(d);
   $('title').textContent = d.title;
   document.title = d.title;
   $('banner').style.display = d.mock ? 'block' : 'none';
+
+  const minT = d.minTemp ?? 45;
+  const maxT = d.maxTemp ?? 55;
+  const tz = d.tzOffsetMin ?? 420;
+  // 基本溫度圖表固定展示今日 07:30 ~ 18:00
+  const cardMinX = dayClock(d.serverTime, tz, 7, 30);
+  const cardMaxX = dayClock(d.serverTime, tz, 18, 0);
+  const inAlertNow = isAlertClock(d.serverTime, tz);
 
   const anomalies = [];
   let staleCount = 0;
@@ -178,20 +310,44 @@ function render(d) {
     if (!c) continue;
     const pts = s.points;
     const recent = pts.filter((p) => p[A] && d.serverTime - p[T] <= ALERT_WINDOW_MS).pop();
+    const curVal = s.latest ? s.latest.v : null;
+    const curOut = inAlertNow && curVal != null && (curVal < minT || curVal > maxT);
+    const isAlert = !!recent || curOut;
+
     c.el.classList.toggle('off', !s.configured);
-    c.el.classList.toggle('alert', !!recent);
-    c.flag.className = 'flag' + (s.stale ? ' bad' : '');
-    c.flag.textContent = !s.configured ? '尚未設定裝置' : s.stale ? '⚠ 資料中斷' : recent ? (recent[A] === 1 ? '▼ 驟降 ' : '▲ 驟升 ') + hm(recent[T]) : '正常';
+    c.el.classList.toggle('alert', isAlert);
+    c.flag.className = 'flag' + (s.stale || isAlert ? ' bad' : '');
+    c.flag.textContent = !s.configured
+      ? '尚未設定裝置'
+      : s.stale
+      ? '⚠ 資料中斷'
+      : recent
+      ? `${anomText(recent[A], minT, maxT)} ${hm(recent[T])}`
+      : curOut
+      ? (curVal < minT ? `▼ 過低 (<${minT}°C)` : `▲ 過高 (>${maxT}°C)`)
+      : inAlertNow
+      ? '正常'
+      : '非警示時段';
     if (s.stale) staleCount++;
-    c.now.textContent = deg(s.latest ? s.latest.v : null);
-    c.sub.textContent = pts.length ? `8 小時 最低 ${Math.min(...pts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...pts.map((p) => p[MAX])).toFixed(1)} °C` : '尚無資料';
-    c.chart.data.datasets[0].data = lineData(pts, d.stepMin);
-    c.chart.data.datasets[1].data = marks(pts, 1);
-    c.chart.data.datasets[2].data = marks(pts, 2);
-    c.chart.options.scales.x.min = d.serverTime - CARD_HOURS * 3600000;
-    c.chart.options.scales.x.max = d.serverTime;
+    c.now.textContent = deg(curVal);
+
+    // 卡片小圖只畫 07:30 ~ 18:00 之間的點位
+    const cardPts = pts.filter((p) => p[T] >= cardMinX && p[T] <= cardMaxX);
+    c.sub.textContent = cardPts.length
+      ? `07:30~18:00 最低 ${Math.min(...cardPts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...cardPts.map((p) => p[MAX])).toFixed(1)} °C`
+      : pts.length
+      ? `今日 最低 ${Math.min(...pts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...pts.map((p) => p[MAX])).toFixed(1)} °C`
+      : '今日尚無資料 (07:00 開始記錄)';
+
+    c.chart.options.plugins.limitLines.minTemp = s.minTemp ?? minT;
+    c.chart.options.plugins.limitLines.maxTemp = s.maxTemp ?? maxT;
+    c.chart.data.datasets[0].data = lineData(cardPts, d.stepMin);
+    c.chart.data.datasets[1].data = marksLow(cardPts);
+    c.chart.data.datasets[2].data = marksHigh(cardPts);
+    c.chart.options.scales.x.min = cardMinX;
+    c.chart.options.scales.x.max = cardMaxX;
     c.chart.update();
-    for (const p of pts) if (p[A]) anomalies.push({ p, line: line.name, sensor: s.name });
+    for (const p of pts) if (p[A]) anomalies.push({ p, lineId: line.id, line: line.name, sensor: s.name });
   }
 
   const st = $('status');
@@ -199,65 +355,90 @@ function render(d) {
   st.textContent = (staleCount ? `⚠ ${staleCount} 個感測點資料中斷 · ` : '') + '更新於 ' + hm(d.serverTime);
 
   anomalies.sort((a, b) => b.p[T] - a.p[T]);
+  renderTicker(anomalies, minT, maxT);
+
   $('anomalies').hidden = !anomalies.length;
   $('noanom').hidden = !!anomalies.length;
-  $('anomalies').querySelector('tbody').innerHTML = anomalies.slice(0, 100).map(({ p, line, sensor }) =>
-    `<tr><td>${full(p[T])}</td><td>${esc(line)}</td><td>${esc(sensor)}</td><td>${p[A] === 1 ? '▼ 驟降' : '▲ 驟升'}</td><td>${deg(p[V])}</td><td>${deg(p[MIN])}</td><td>${deg(p[MAX])}</td></tr>`).join('');
+  $('anomalies').querySelector('tbody').innerHTML = anomalies.slice(0, 100).map(({ p, lineId, line, sensor }) =>
+    `<tr class="clickable" data-line="${esc(lineId)}" data-ts="${p[T]}" title="點擊開啟 ${esc(line)} 歷史曲線圖">` +
+      `<td>${full(p[T])}</td><td>${esc(line)}</td><td>${esc(sensor)}</td>` +
+      `<td style="color:var(--drop);font-weight:600">${esc(anomText(p[A], minT, maxT))}</td>` +
+      `<td>${deg(p[V])}</td><td>${deg(p[MIN])}</td><td>${deg(p[MAX])}</td>` +
+    `</tr>`).join('');
 }
 
-// ---- 大曲線圖：一條產線的 3 個感測點畫在同一張圖，各用不同顏色 ----
+// ---- 大曲線圖：一條產線的 3 個感測點畫在同一張圖 (今日 / 昨日 固定 07:00~19:00；本週顯示週一至週日) ----
 function renderBig(d) {
   const line = d.lines[0];
   if (!line) return;
-  const label = RANGES.find(([h]) => h === big.hours)[1];
-  $('bigTitle').textContent = `${line.name} — 最近 ${label}`;
-  $('bigNote').textContent = `▼ 驟降　▲ 驟升（三角形顏色對應感測點）　${d.stepMin > 1 ? `此區間每 ${d.stepMin} 分鐘一點，異常仍保留極值` : '每分鐘一點'}`;
-  [...$('bigRanges').children].forEach((b) => b.classList.toggle('on', Number(b.dataset.h) === big.hours));
+  const rItem = RANGES.find(([r]) => r === big.range) || RANGES[0];
+  const minT = d.minTemp ?? 45;
+  const maxT = d.maxTemp ?? 55;
+  $('bigTitle').textContent = `${line.name} — ${rItem[1]}（07:00 ~ 19:00）`;
+  $('bigNote').textContent = `紅虛線：標準範圍 ${minT}~${maxT}°C　｜　警示時段：07:30~11:20、12:30~18:30　｜　▼ 過低/驟降　▲ 過高/驟升　（${d.stepMin > 1 ? `每 ${d.stepMin} 分鐘一點，保留異常極值` : '每分鐘一點'}）`;
+  [...$('bigRanges').children].forEach((b) => b.classList.toggle('on', b.dataset.range === big.range));
   if (!big.chart) {
     const sets = [];
     for (let i = 0; i < 3; i++) sets.push(lineSet('', color(i), 2));
     for (let i = 0; i < 3; i++) sets.push(triSet('', color(i), 180, 7), triSet('', color(i), 0, 7));
     big.chart = makeChart($('bigChart'), sets, { big: true });
   }
+  big.chart.options.plugins.limitLines.minTemp = minT;
+  big.chart.options.plugins.limitLines.maxTemp = maxT;
   const ds = big.chart.data.datasets;
   for (let i = 0; i < 3; i++) {
     const s = line.sensors[i];
     const pts = s ? s.points : [];
     ds[i].label = s ? s.name : '';
     ds[i].data = lineData(pts, d.stepMin);
-    ds[3 + i * 2].label = s ? s.name + ' ▼ 驟降' : '';
-    ds[3 + i * 2].data = marks(pts, 1);
-    ds[4 + i * 2].label = s ? s.name + ' ▲ 驟升' : '';
-    ds[4 + i * 2].data = marks(pts, 2);
+    ds[3 + i * 2].label = s ? s.name + ' ▼ 過低/驟降' : '';
+    ds[3 + i * 2].data = marksLow(pts);
+    ds[4 + i * 2].label = s ? s.name + ' ▲ 過高/驟升' : '';
+    ds[4 + i * 2].data = marksHigh(pts);
   }
-  big.chart.options.scales.x.min = d.serverTime - big.hours * 3600000;
-  big.chart.options.scales.x.max = d.serverTime;
+  big.chart.options.scales.x.min = d.since;
+  big.chart.options.scales.x.max = d.until;
   big.chart.update();
 }
 
 async function refreshBig() {
   if (!big.lineId || !$('big').open) return;
   try {
-    const r = await fetch(`/api/readings?hours=${big.hours}&line=${encodeURIComponent(big.lineId)}`, { cache: 'no-store' });
+    const r = await fetch(`/api/readings?range=${encodeURIComponent(big.range)}&line=${encodeURIComponent(big.lineId)}`, { cache: 'no-store' });
     renderBig(await r.json());
   } catch (e) { /* 主畫面的狀態列會顯示連線問題 */ }
 }
 
-function openBig(lineId, hours) {
+function openBig(lineId, range) {
   big.lineId = lineId;
-  big.hours = hours;
+  big.range = range || 'today';
   if (!$('big').open) $('big').showModal();
   refreshBig();
 }
 
-$('lines').addEventListener('click', (e) => { const b = e.target.closest('button[data-line]'); if (b) openBig(b.dataset.line, Number(b.dataset.h)); });
-$('bigRanges').addEventListener('click', (e) => { const b = e.target.closest('button[data-h]'); if (b) openBig(big.lineId, Number(b.dataset.h)); });
+$('lines').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-line]');
+  if (b) openBig(b.dataset.line, b.dataset.range);
+});
+$('bigRanges').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-range]');
+  if (b) openBig(big.lineId, b.dataset.range);
+});
+// 點擊上方跑馬燈或下方異常紀錄表 → 直接跳出該產線的歷史大圖
+$('tickerTrack').addEventListener('click', (e) => {
+  const item = e.target.closest('[data-line]');
+  if (item) openBig(item.dataset.line, 'today');
+});
+$('anomalies').addEventListener('click', (e) => {
+  const row = e.target.closest('tr[data-line]');
+  if (row) openBig(row.dataset.line, 'today');
+});
 $('bigClose').addEventListener('click', () => $('big').close());
-$('big').addEventListener('click', (e) => { if (e.target === $('big')) $('big').close(); }); // 點視窗外關閉
+$('big').addEventListener('click', (e) => { if (e.target === $('big')) $('big').close(); });
 
 async function refresh() {
   try {
-    const r = await fetch('/api/readings?hours=' + CARD_HOURS, { cache: 'no-store' });
+    const r = await fetch('/api/readings?range=today', { cache: 'no-store' });
     render(await r.json());
   } catch (e) {
     $('status').className = 'status bad';
