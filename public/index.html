@@ -15,26 +15,25 @@
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
   main { max-width: 1320px; margin: 0 auto; padding: 16px 16px 40px; }
-  header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px; }
+  header { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:8px 16px; }
   h1 { font-size: 1.2rem; margin: 0; font-weight: 600; }
-  .rules { font-size:.8rem; color:var(--muted); margin-top:4px; }
+  .head-right { text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
   .status { font-size:.85rem; color:var(--muted); }
   .status.bad { color: var(--drop); font-weight:600; }
+  .rules { font-size:.78rem; color:var(--muted); }
   .banner { display:none; margin-top:12px; padding:8px 12px; border-radius:8px; background:#fef3c7; color:#78350f; font-size:.9rem; }
 
-  /* 上方異常跑馬燈 */
+  /* 上方異常訊息列：不連續滾動，改為每 7 秒平穩切換下一筆（或滑鼠移上暫停），也可點左右切換 */
   .ticker { display:flex; align-items:center; gap:10px; margin-top:12px; padding:8px 12px; border-radius:10px; border:1px solid var(--border); background:var(--card); overflow:hidden; }
   .ticker.has-alert { border-color:var(--drop); background:var(--alert-bg); }
   .ticker-badge { font-size:.78rem; font-weight:600; padding:3px 8px; border-radius:6px; white-space:nowrap; background:#e5e7eb; color:#374151; }
   .ticker.has-alert .ticker-badge { background:var(--drop); color:#fff; }
-  .ticker-viewport { flex:1; overflow:hidden; white-space:nowrap; position:relative; }
-  .ticker-track { display:inline-block; white-space:nowrap; }
-  .ticker.has-alert .ticker-track { padding-left:100%; animation: marquee 28s linear infinite; }
-  .ticker.has-alert:hover .ticker-track { animation-play-state: paused; }
-  .ticker-item { display:inline-block; margin-right:28px; font-size:.88rem; color:var(--drop); font-weight:600; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+  .ticker-viewport { flex:1; overflow:hidden; position:relative; min-height:22px; display:flex; align-items:center; }
+  .ticker-track { display:flex; flex-wrap:wrap; gap:6px 20px; align-items:center; transition: opacity .45s ease; }
+  .ticker-item { display:inline-block; font-size:.88rem; color:var(--drop); font-weight:600; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
   .ticker-item:hover { opacity:.8; }
   .ticker-ok { font-size:.85rem; color:var(--muted); }
-  @keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-100%); } }
+  .ticker-nav { font-size:.76rem; color:var(--muted); white-space:nowrap; }
 
   h2 { font-size:1rem; margin:22px 0 8px; font-weight:600; }
   .hint { font-weight:400; font-size:.8rem; color:var(--muted); margin-left:8px; }
@@ -85,20 +84,21 @@
 <body>
 <main>
   <header>
-    <div>
-      <h1 id="title">成型產線溫度監控</h1>
-      <div class="rules" id="rules">標準範圍 45.0 ~ 55.0 °C（紅虛線） · 記錄時段 07:00~19:00 · 警示時段 07:30~11:20、12:30~18:30</div>
+    <h1 id="title">成型產線溫度監控</h1>
+    <div class="head-right">
+      <div class="status" id="status">連線中…</div>
+      <div class="rules" id="rules">標準 45~55°C · 警示 07:30~11:20、12:30~18:30（除外時段低溫不警示）</div>
     </div>
-    <div class="status" id="status">連線中…</div>
   </header>
   <div class="banner" id="banner">示範模式：目前顯示的是假資料，尚未連接塗鴉裝置。</div>
 
-  <!-- 異常跑馬燈：點擊任一筆可直接跳出對應產線的歷史大圖 -->
+  <!-- 異常提示列：不連續快跑，每 8 秒平穩輪播一頁，點擊任一筆直接跳出對應產線的歷史大圖 -->
   <div class="ticker" id="ticker">
     <span class="ticker-badge" id="tickerBadge">正常</span>
     <div class="ticker-viewport">
       <div class="ticker-track" id="tickerTrack"><span class="ticker-ok">目前警示時段內無溫度異常</span></div>
     </div>
+    <span class="ticker-nav" id="tickerNav"></span>
   </div>
 
   <div id="lines"></div>
@@ -229,11 +229,10 @@ function makeChart(canvas, datasets, opts) {
           },
         },
         y: {
-          suggestedMin: 40,
-          suggestedMax: 60,
+          min: 20,
+          max: 65,
           grid: { color: css('--border') },
-          ticks: { color: css('--muted'), maxTicksLimit: opts.big ? 8 : 5, callback: (v) => v + '°' },
-          grace: '8%',
+          ticks: { color: css('--muted'), stepSize: opts.big ? 5 : 15, callback: (v) => v + '°' },
         },
       },
       plugins: {
@@ -269,24 +268,53 @@ function build(d) {
   $('bigRanges').innerHTML = RANGES.map(([r, label]) => `<button class="btn" data-range="${r}">${label}</button>`).join('');
 }
 
-function renderTicker(anomalies, minT, maxT) {
-  const box = $('ticker');
-  const badge = $('tickerBadge');
+let tickerItems = [];
+let tickerPage = 0;
+let tickerPaused = false;
+const TICKER_PAGE_SIZE = 2; // 每次停住顯示 2 筆，每 8 秒平穩換下一組，不連續橫向快跑
+
+function drawTickerPage() {
   const track = $('tickerTrack');
-  if (!anomalies.length) {
-    box.classList.remove('has-alert');
-    badge.textContent = '正常';
+  const nav = $('tickerNav');
+  if (!tickerItems.length) {
     track.innerHTML = '<span class="ticker-ok">目前今日警示時段 (07:30~11:20、12:30~18:30) 內無溫度異常</span>';
+    nav.textContent = '';
     return;
   }
-  box.classList.add('has-alert');
-  badge.textContent = `⚠ 異常 (${anomalies.length})`;
-  track.innerHTML = anomalies.slice(0, 20).map(({ p, lineId, line, sensor }) =>
+  const pages = Math.ceil(tickerItems.length / TICKER_PAGE_SIZE);
+  tickerPage = tickerPage % pages;
+  const slice = tickerItems.slice(tickerPage * TICKER_PAGE_SIZE, (tickerPage + 1) * TICKER_PAGE_SIZE);
+  track.innerHTML = slice.map(({ p, lineId, line, sensor, minT, maxT }) =>
     `<span class="ticker-item" data-line="${esc(lineId)}" data-ts="${p[T]}" title="點擊查看 ${esc(line)} 歷史曲線">` +
       `[${hm(p[T])}] ${esc(line)} - ${esc(sensor)}：${anomText(p[A], minT, maxT)} (${p[V].toFixed(1)}°C)` +
     `</span>`
   ).join('');
+  nav.textContent = pages > 1 ? `${tickerPage + 1} / ${pages}（點擊查看圖表）` : '點擊查看圖表';
 }
+
+function renderTicker(anomalies, minT, maxT) {
+  const box = $('ticker');
+  const badge = $('tickerBadge');
+  tickerItems = anomalies.slice(0, 20).map((x) => ({ ...x, minT, maxT }));
+  tickerPage = 0;
+  if (!tickerItems.length) {
+    box.classList.remove('has-alert');
+    badge.textContent = '正常';
+  } else {
+    box.classList.add('has-alert');
+    badge.textContent = `⚠ 異常 (${anomalies.length})`;
+  }
+  drawTickerPage();
+}
+
+$('ticker').addEventListener('mouseenter', () => { tickerPaused = true; });
+$('ticker').addEventListener('mouseleave', () => { tickerPaused = false; });
+setInterval(() => {
+  if (!tickerPaused && tickerItems.length > TICKER_PAGE_SIZE) {
+    tickerPage++;
+    drawTickerPage();
+  }
+}, 8000);
 
 function render(d) {
   latestData = d;
