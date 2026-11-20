@@ -7,10 +7,10 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --text:#1c2430; --muted:#6b7684; --drop:#dc2626; --spike:#d97706; --border:#e3e6ea; --alert-bg:#fef2f2;
-          --s0:#2563eb; --s1:#059669; --s2:#9333ea; --accent:#2563eb; --limit:#ef4444; }
+          --s0:#2563eb; --s1:#059669; --s2:#9333ea; --accent:#2563eb; --limit:#ef4444; --rest-bg:rgba(148,163,184,0.13); }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#12161c; --card:#1b212a; --text:#e8ecf1; --muted:#93a0b0; --drop:#f87171; --spike:#fbbf24; --border:#2b3440; --alert-bg:#2a1b1e;
-            --s0:#60a5fa; --s1:#34d399; --s2:#c084fc; --accent:#3b82f6; --limit:#f87171; }
+            --s0:#60a5fa; --s1:#34d399; --s2:#c084fc; --accent:#3b82f6; --limit:#f87171; --rest-bg:rgba(148,163,184,0.12); }
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
@@ -171,9 +171,50 @@ function isAlertClock(ts, tzOffsetMin) {
   return (m >= 450 && m <= 680) || (m >= 750 && m <= 1110);
 }
 
-// Chart.js 外掛：在圖表畫出 45°C 下限與 55°C 上限紅色虛線
+// Chart.js 外掛：
+// 1. beforeDraw：在非作業/休息時段 (07:30 以前、11:20~12:30 午休、18:30 以後) 鋪上極淺的淺灰色背景，並在下方座標軸旁標註「(休息)」
+// 2. afterDraw：畫出 45°C 下限與 55°C 上限紅色虛線
 const limitLinesPlugin = {
   id: 'limitLines',
+  beforeDraw(chart) {
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea || !scales.x) return;
+    const minX = scales.x.min;
+    const maxX = scales.x.max;
+    if (!Number.isFinite(minX) || !Number.isFinite(maxX) || maxX - minX > 3 * 86400000) return; // 本週多日圖不畫單日色塊
+    const tz = chart.options.plugins.limitLines?.tzOffsetMin ?? 420;
+    const isBig = !!chart.options.plugins.limitLines?.big;
+    const tzMs = tz * 60000;
+    const day0 = Math.floor((minX + tzMs) / 86400000) * 86400000 - tzMs;
+    const atMin = (m) => day0 + m * 60000;
+    // 三個非作業時段：07:00~07:30 (預熱/未作業)、11:20~12:30 (午休)、18:30~19:00 (收工)
+    const zones = [
+      [atMin(7 * 60), atMin(7 * 60 + 30), '07:30前 (休息)'],
+      [atMin(11 * 60 + 20), atMin(12 * 60 + 30), '11:20~12:30 (休息)'],
+      [atMin(18 * 60 + 30), atMin(19 * 60), '18:30後 (休息)'],
+    ];
+    ctx.save();
+    const restBg = css('--rest-bg') || 'rgba(148,163,184,0.13)';
+    const mutedColor = css('--muted') || '#6b7684';
+    for (const [zStart, zEnd, label] of zones) {
+      const s = Math.max(zStart, minX);
+      const e = Math.min(zEnd, maxX);
+      if (e <= s) continue;
+      const x1 = scales.x.getPixelForValue(s);
+      const x2 = scales.x.getPixelForValue(e);
+      ctx.fillStyle = restBg;
+      ctx.fillRect(x1, chartArea.top, x2 - x1, chartArea.bottom - chartArea.top);
+      // 在下方接近座標軸處標註「(休息)」
+      if (x2 - x1 >= 26) {
+        ctx.fillStyle = mutedColor;
+        ctx.font = (isBig ? '11px ' : '9.5px ') + 'system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        const text = isBig && x2 - x1 >= 78 ? label : '(休息)';
+        ctx.fillText(text, (x1 + x2) / 2, chartArea.bottom - (isBig ? 7 : 4));
+      }
+    }
+    ctx.restore();
+  },
   afterDraw(chart) {
     const { ctx, chartArea, scales } = chart;
     if (!chartArea || !scales.y) return;
@@ -227,7 +268,12 @@ function makeChart(canvas, datasets, opts) {
           ticks: {
             color: css('--muted'),
             maxTicksLimit: opts.big ? 13 : 6,
-            callback: (v) => (big.range === 'week' && opts.big ? full(v) : hm(v)),
+            callback: (v) => {
+              if (big.range === 'week' && opts.big) return full(v);
+              const t = hm(v);
+              if (opts.big && (t === '11:30' || t === '11:45' || t === '12:00' || t === '12:15')) return t + ' (休息)';
+              return t;
+            },
           },
         },
         y: {
@@ -377,6 +423,7 @@ function render(d) {
 
     c.chart.options.plugins.limitLines.minTemp = s.minTemp ?? minT;
     c.chart.options.plugins.limitLines.maxTemp = s.maxTemp ?? maxT;
+    c.chart.options.plugins.limitLines.tzOffsetMin = tz;
     c.chart.data.datasets[0].data = lineData(cardPts, d.stepMin);
     c.chart.options.scales.x.min = cardMinX;
     c.chart.options.scales.x.max = cardMaxX;
@@ -418,6 +465,7 @@ function renderBig(d) {
   }
   big.chart.options.plugins.limitLines.minTemp = minT;
   big.chart.options.plugins.limitLines.maxTemp = maxT;
+  big.chart.options.plugins.limitLines.tzOffsetMin = d.tzOffsetMin ?? 420;
   const ds = big.chart.data.datasets;
   for (let i = 0; i < 3; i++) {
     const s = line.sensors[i];
