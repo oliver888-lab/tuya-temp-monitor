@@ -64,7 +64,7 @@ export function getConfig() {
     alarmCooldownMin: num('ALARM_COOLDOWN_MIN', 30), // 異常響完一次後，間隔幾分鐘才再響一次 (預設 30 分鐘)
     alarmPulseMs: num('ALARM_PULSE_MS', 3500),       // 每次觸發警報維持幾毫秒後自動消音 (預設 3.5 秒 ≈ 響 3 聲)
     tzOffsetMin: TZ_OFFSET_MIN,
-    retainDays: num('RETAIN_DAYS', 30),
+    retainDays: num('RETAIN_DAYS', 90),
     adminKey: env('ADMIN_KEY'),
     tuya: {
       accessId: env('TUYA_ACCESS_ID'),
@@ -85,7 +85,28 @@ export function getConfig() {
   return cfg;
 }
 
-// 依據警示時段與上下限 (45~55°C) 重新評估點位異常：
+// 套用某條產線動態設定的「目前生產鞋型與溫度上下限」
+export function applyLinePreset(line, linePresets) {
+  const p = (linePresets || {})[line.id];
+  if (!p) return { ...line, shoeName: '', cardUid: '', minTemp: null, maxTemp: null };
+  const minT = Number.isFinite(Number(p.minTemp)) ? Number(p.minTemp) : null;
+  const maxT = Number.isFinite(Number(p.maxTemp)) ? Number(p.maxTemp) : null;
+  return {
+    ...line,
+    shoeName: p.shoeName || '',
+    cardUid: p.cardUid || '',
+    minTemp: minT,
+    maxTemp: maxT,
+    updatedAt: p.updatedAt || null,
+    sensors: line.sensors.map((s) => ({
+      ...s,
+      minTemp: minT ?? s.minTemp,
+      maxTemp: maxT ?? s.maxTemp,
+    })),
+  };
+}
+
+// 依據警示時段與上下限 (預設 45~55°C，或該線鞋型設定的上下限) 重新評估點位異常：
 // 非警示時段 (烘箱不開，低溫正常) → 一律不標記異常 (0)
 // 警示時段內：低於下限 → 3 (過低)，高於上限 → 4 (過高)，否則保留驟降(1) / 驟升(2)
 export function evalAnomalyCode(t, v, rawAnomaly, sensor) {

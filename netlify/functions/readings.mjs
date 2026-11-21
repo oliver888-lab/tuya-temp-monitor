@@ -1,6 +1,6 @@
-// GET /api/readings?range=today|yesterday|week (或舊相容 hours=24) [&line=<產線 id>]
-// 只回傳記錄時段 (07:00~19:00) 的點位，並附帶上下限 (45~55°C) 與警示時段異常碼。
-import { getConfig, store, dayKey, readJson, fromRow, compact, downsample, MinuteAggregator, isRecordTime, localDayStart, mockValue, MINUTE, json } from '../lib/cloud.mjs';
+// GET /api/readings?range=today|yesterday|week 或 &date=YYYY-MM-DD [&line=<產線 id>]
+// 只回傳記錄時段 (07:00~19:00) 的點位，並附帶各產線鞋型、上下限 (預設 45~55°C 或鞋型設定) 與警示時段異常碼。
+import { getConfig, store, dayKey, readJson, fromRow, compact, downsample, MinuteAggregator, applyLinePreset, isRecordTime, localDayStart, TZ_MS, mockValue, MINUTE, json } from '../lib/cloud.mjs';
 
 export const config = { path: '/api/readings' };
 
@@ -8,23 +8,29 @@ const DAY = 86_400_000;
 const STALE_MS = 180_000;
 
 function resolveWindow(url, now, retainDays) {
+  const dateStr = (url.searchParams.get('date') || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const day0 = Date.UTC(y, m - 1, d) - TZ_MS; // 該日期在工廠時區的 00:00
+    return { range: 'date', date: dateStr, since: day0 + 7 * 3600_000, until: day0 + 19 * 3600_000, hours: 12, stepMin: 1 };
+  }
   const range = url.searchParams.get('range') || '';
   const today0 = localDayStart(now);
   if (range === 'today') {
-    return { range: 'today', since: today0 + 7 * 3600_000, until: today0 + 19 * 3600_000, hours: 12, stepMin: 1 };
+    return { range: 'today', date: '', since: today0 + 7 * 3600_000, until: today0 + 19 * 3600_000, hours: 12, stepMin: 1 };
   }
   if (range === 'yesterday') {
     const y0 = today0 - DAY;
-    return { range: 'yesterday', since: y0 + 7 * 3600_000, until: y0 + 19 * 3600_000, hours: 12, stepMin: 1 };
+    return { range: 'yesterday', date: '', since: y0 + 7 * 3600_000, until: y0 + 19 * 3600_000, hours: 12, stepMin: 1 };
   }
   if (range === 'week') {
     const d = new Date(today0 + 12 * 3600_000);
     const dow = (d.getUTCDay() + 6) % 7; // 週一 = 0 ~ 週日 = 6
     const mon0 = today0 - dow * DAY;
-    return { range: 'week', since: mon0 + 7 * 3600_000, until: mon0 + 6 * DAY + 19 * 3600_000, hours: 168, stepMin: 5 };
+    return { range: 'week', date: '', since: mon0 + 7 * 3600_000, until: mon0 + 6 * DAY + 19 * 3600_000, hours: 168, stepMin: 5 };
   }
   const hours = Math.min(Math.max(Number(url.searchParams.get('hours')) || 24, 0.25), Math.min(retainDays * 24, 168));
-  return { range: '', since: now - hours * 3600_000, until: now, hours, stepMin: hours > 24 ? 5 : 1 };
+  return { range: '', date: '', since: now - hours * 3600_000, until: now, hours, stepMin: hours > 24 ? 5 : 1 };
 }
 
 function mockPoints(index, since, until, now, threshold) {
@@ -46,20 +52,25 @@ export default async (req) => {
   const cfg = getConfig();
   const url = new URL(req.url);
   const now = Date.now();
-  const { range, since, until, hours, stepMin } = resolveWindow(url, now, cfg.retainDays);
+  const { range, date, since, until, hours, stepMin } = resolveWindow(url, now, cfg.retainDays);
   const lineId = url.searchParams.get('line');
-  const lines = cfg.lines.filter((l) => !lineId || l.id === lineId);
 
   let days = [];
-  let state = { sensors: {} };
+  let state = { sensors: {}, linePresets: {}, shoeCatalog: [] };
   if (!cfg.mock) {
     const s = store();
     const keys = [];
     const endTs = Math.min(until, now);
     for (let d = Math.floor(since / DAY) * DAY; d <= endTs; d += DAY) keys.push(dayKey(d));
-    [state, ...days] = await Promise.all([readJson(s, 'state', { sensors: {} }), ...keys.map((k) => readJson(s, k, {}))]);
+    [state, ...days] = await Promise.all([readJson(s, 'state', { sensors: {}, linePresets: {}, shoeCatalog: [] }), ...keys.map((k) => readJson(s, k, {}))]);
     state.sensors ||= {};
+    state.linePresets ||= {};
+    state.shoeCatalog ||= [];
   }
+
+  const lines = cfg.lines
+    .filter((l) => !lineId || l.id === lineId)
+    .map((l) => applyLinePreset(l, state.linePresets));
 
   const indexOf = new Map(cfg.sensors.map((x, i) => [x.id, i]));
   return json({
@@ -68,9 +79,13 @@ export default async (req) => {
     pollSec: cfg.pollSec,
     serverTime: now,
     tzOffsetMin: cfg.tzOffsetMin,
+    retainDays: cfg.retainDays,
     minTemp: cfg.minTemp,
     maxTemp: cfg.maxTemp,
+    shoeCatalog: state.shoeCatalog || [],
+    lastRfid: state.lastRfid || null,
     range,
+    date,
     since,
     until,
     hours,
@@ -78,6 +93,10 @@ export default async (req) => {
     lines: lines.map((line) => ({
       id: line.id,
       name: line.name,
+      shoeName: line.shoeName || '',
+      cardUid: line.cardUid || '',
+      minTemp: line.minTemp ?? cfg.minTemp,
+      maxTemp: line.maxTemp ?? cfg.maxTemp,
       sensors: line.sensors.map((sensor) => {
         let pts, latest, stale, lastAlarmAt;
         if (cfg.mock) {
@@ -110,5 +129,5 @@ export default async (req) => {
         };
       }),
     })),
-  }, 200, { 'Netlify-CDN-Cache-Control': 'public, s-maxage=30' });
+  }, 200, { 'Netlify-CDN-Cache-Control': 'public, s-maxage=15' });
 };

@@ -1,7 +1,7 @@
 // 排程函式：每分鐘向塗鴉批次讀取所有感測點，每個感測點寫入一個分鐘點。
-// 只在工廠記錄時段 (07:00 ~ 19:00) 寫入歷史點位；警示時段內判斷上下限 (45~55°C) 與驟變。
+// 只在工廠記錄時段 (07:00 ~ 19:00) 寫入歷史點位；警示時段內判斷上下限 (預設 45~55°C 或該線鞋型設定) 與驟變。
 // 當警示時段內出現異常時：觸發溫度計連續響約 3 聲 (3.5 秒) 後自動消音，並進入 30 分鐘冷卻期；30 分鐘後若仍異常才再響一次。
-import { getConfig, store, dayKey, readJson, toRow, finalize, evalAnomalyCode, isRecordTime, TuyaClient, pickTemperature, pulseDeviceAlarm, MINUTE } from '../lib/cloud.mjs';
+import { getConfig, store, dayKey, readJson, toRow, finalize, evalAnomalyCode, applyLinePreset, isRecordTime, TuyaClient, pickTemperature, pulseDeviceAlarm, MINUTE } from '../lib/cloud.mjs';
 
 export const config = { schedule: '* * * * *' };
 
@@ -24,7 +24,8 @@ export default async () => {
   tuya.token = state.token || null; // 沿用上次的 token，省下每分鐘一次的 token 呼叫
   tuya.tokenExpiresAt = state.tokenExpiresAt || 0;
 
-  const active = cfg.sensors.filter((x) => x.deviceId);
+  const lines = cfg.lines.map((l) => applyLinePreset(l, state.linePresets));
+  const active = lines.flatMap((l) => l.sensors).filter((x) => x.deviceId);
   let statuses = null;
   let batchError = null;
   try {

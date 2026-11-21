@@ -35,8 +35,16 @@
   .ticker-ok { font-size:.85rem; color:var(--muted); }
   .ticker-nav { font-size:.76rem; color:var(--muted); white-space:nowrap; }
 
-  h2 { font-size:1rem; margin:22px 0 8px; font-weight:600; }
-  .hint { font-weight:400; font-size:.8rem; color:var(--muted); margin-left:8px; }
+  h2 { font-size:1rem; margin:22px 0 8px; font-weight:600; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .hint { font-weight:400; font-size:.8rem; color:var(--muted); margin-left:4px; }
+  .shoe-tag { font-size:.78rem; font-weight:500; padding:3px 9px; border-radius:999px; background:var(--card); border:1px solid var(--border); color:var(--text); cursor:pointer; display:inline-flex; align-items:center; gap:5px; }
+  .shoe-tag:hover { border-color:var(--accent); color:var(--accent); }
+  .shoe-tag.active { background:rgba(37,99,235,.1); border-color:var(--accent); color:var(--accent); font-weight:600; }
+  .date-input { border:1px solid var(--border); background:var(--card); color:var(--text); padding:4px 8px; border-radius:8px; font-size:.82rem; font-family:inherit; cursor:pointer; }
+  .date-input:hover, .date-input:focus { border-color:var(--accent); outline:none; }
+  .form-grid { display:grid; grid-template-columns: 110px 1fr; gap:10px 12px; align-items:center; font-size:.9rem; margin:12px 0; }
+  .form-grid input, .form-grid select { border:1px solid var(--border); background:var(--bg); color:var(--text); padding:6px 10px; border-radius:8px; font-size:.9rem; width:100%; }
+  .form-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
 
   /* 每條產線：左邊 3 張感測點卡片，右邊 3 個小按鈕 (今日/昨日/本週) */
   .row { display:flex; gap:10px; align-items:stretch; }
@@ -122,10 +130,38 @@
   <div class="dhead">
     <h3 id="bigTitle"></h3>
     <div class="side" id="bigRanges"></div>
+    <input type="date" class="date-input" id="bigDate" title="選擇過去 90 天內任一日期查看 07:00~19:00 溫度曲線">
     <button class="btn" id="bigClose">✕ 關閉</button>
   </div>
   <div class="bigbox"><canvas id="bigChart"></canvas></div>
   <div class="note" id="bigNote"></div>
+</dialog>
+
+<dialog id="shoeDlg" style="width:min(460px, 94vw)">
+  <div class="dhead">
+    <h3 id="shoeDlgTitle">設定生產鞋型與溫度標準</h3>
+    <button class="btn" id="shoeDlgClose">✕</button>
+  </div>
+  <div class="form-grid">
+    <label>快速套用配方</label>
+    <select id="shoeSelect"><option value="">— 手動輸入或選擇已存鞋型 —</option></select>
+    <label>目前生產鞋型</label>
+    <input type="text" id="shoeNameInput" placeholder="例如：Nike-Air-01（留空代表預設標準）">
+    <label>標準下限 (°C)</label>
+    <input type="number" step="0.5" id="shoeMinInput" value="45">
+    <label>標準上限 (°C)</label>
+    <input type="number" step="0.5" id="shoeMaxInput" value="55">
+    <label>綁定 RFID 卡號</label>
+    <div style="display:flex;gap:6px">
+      <input type="text" id="shoeCardInput" placeholder="選填，刷卡機讀到的卡號">
+      <button class="btn" type="button" id="useLastCardBtn" title="填入讀卡機最近一次刷到的卡號">帶入剛刷的卡</button>
+    </div>
+  </div>
+  <div class="note" id="lastRfidNote">提示：設定後，該產線的上下限紅虛線與警報門檻會立即更新，並自動存入常用鞋型配方。</div>
+  <div class="form-actions">
+    <button class="btn" type="button" id="shoeResetBtn">恢復預設 (45~55°C)</button>
+    <button class="btn on" type="button" id="shoeSaveBtn">儲存並套用</button>
+  </div>
 </dialog>
 
 <script>
@@ -133,7 +169,8 @@ const REFRESH_MS = 30000;
 const ALERT_WINDOW_MS = 5 * 60000;    // 最近 5 分鐘內有異常 → 卡片標紅
 const RANGES = [['today', '今日'], ['yesterday', '昨日'], ['week', '本週']];
 const cards = {};                     // 感測點 id → 卡片元素與圖表
-const big = { lineId: null, range: 'today', chart: null, focusTs: null };
+const lineEls = {};                   // 產線 id → 鞋型標籤元素
+const big = { lineId: null, range: 'today', date: '', chart: null, focusTs: null };
 let latestData = null;
 
 const $ = (id) => document.getElementById(id);
@@ -294,7 +331,9 @@ function makeChart(canvas, datasets, opts) {
 
 function build(d) {
   $('lines').innerHTML = d.lines.map((line) =>
-    `<h2>${esc(line.name)}</h2><div class="row"><div class="grid">` + line.sensors.map((s, i) =>
+    `<h2><span>${esc(line.name)}</span>` +
+      `<button class="shoe-tag" id="shoe-${esc(line.id)}" data-shoe-line="${esc(line.id)}" title="點擊設定此產線目前生產的鞋型與溫度上下限（或由 RFID 刷卡自動切換）"></button>` +
+    `</h2><div class="row"><div class="grid">` + line.sensors.map((s, i) =>
       `<div class="card sensor" id="c-${s.id}">
          <div class="top"><span class="name"><span class="dot" style="background:var(--s${i % 3})"></span>${esc(s.name)}</span><span class="flag"></span></div>
          <div class="now-row">
@@ -309,12 +348,16 @@ function build(d) {
        </div>`).join('') +
     `</div><div class="side" title="開啟 ${esc(line.name)} 的大曲線圖">` +
       RANGES.map(([r, label]) => `<button class="btn" data-line="${esc(line.id)}" data-range="${r}">${label}</button>`).join('') +
+      `<button class="btn" data-line="${esc(line.id)}" data-range="pickdate" title="選擇過去 90 天內任一日期">📅 查日期</button>` +
     `</div></div>`).join('');
-  for (const line of d.lines) line.sensors.forEach((s, i) => {
-    const el = $('c-' + s.id);
-    const chart = makeChart(el.querySelector('canvas'), [lineSet('溫度', color(i), 1.8)], {});
-    cards[s.id] = { el, flag: el.querySelector('.flag'), now: el.querySelector('.now'), sub: el.querySelector('.sub'), chart };
-  });
+  for (const line of d.lines) {
+    lineEls[line.id] = $('shoe-' + line.id);
+    line.sensors.forEach((s, i) => {
+      const el = $('c-' + s.id);
+      const chart = makeChart(el.querySelector('canvas'), [lineSet('溫度', color(i), 1.8)], {});
+      cards[s.id] = { el, flag: el.querySelector('.flag'), now: el.querySelector('.now'), sub: el.querySelector('.sub'), chart };
+    });
+  }
   $('bigRanges').innerHTML = RANGES.map(([r, label]) => `<button class="btn" data-range="${r}">${label}</button>`).join('');
 }
 
@@ -383,52 +426,65 @@ function render(d) {
 
   const anomalies = [];
   let staleCount = 0;
-  for (const line of d.lines) for (const s of line.sensors) {
-    const c = cards[s.id];
-    if (!c) continue;
-    const pts = s.points;
-    const recent = pts.filter((p) => p[A] && d.serverTime - p[T] <= ALERT_WINDOW_MS).pop();
-    const curVal = s.latest ? s.latest.v : null;
-    const curOut = inAlertNow && curVal != null && (curVal < minT || curVal > maxT);
-    const isAlert = !!recent || curOut;
+  for (const line of d.lines) {
+    const lMin = line.minTemp ?? minT;
+    const lMax = line.maxTemp ?? maxT;
+    const shoeBtn = lineEls[line.id];
+    if (shoeBtn) {
+      shoeBtn.classList.toggle('active', !!line.shoeName);
+      shoeBtn.textContent = line.shoeName
+        ? `👟 鞋型：${line.shoeName} (${lMin}~${lMax}°C) ✎`
+        : `👟 設定鞋型 (${lMin}~${lMax}°C) ✎`;
+    }
+    for (const s of line.sensors) {
+      const c = cards[s.id];
+      if (!c) continue;
+      const sMin = s.minTemp ?? lMin;
+      const sMax = s.maxTemp ?? lMax;
+      const pts = s.points;
+      const recent = pts.filter((p) => p[A] && d.serverTime - p[T] <= ALERT_WINDOW_MS).pop();
+      const curVal = s.latest ? s.latest.v : null;
+      const curOut = inAlertNow && curVal != null && (curVal < sMin || curVal > sMax);
+      const isAlert = !!recent || curOut;
 
-    c.el.classList.toggle('off', !s.configured);
-    c.el.classList.toggle('alert', isAlert);
-    c.flag.className = 'flag' + (s.stale || isAlert ? ' bad' : '');
-    c.flag.textContent = !s.configured
-      ? '尚未設定裝置'
-      : s.stale
-      ? '⚠ 資料中斷'
-      : recent
-      ? `${anomText(recent[A], minT, maxT)} ${hm(recent[T])}`
-      : curOut
-      ? (curVal < minT ? `▼ 過低 (<${minT}°C)` : `▲ 過高 (>${maxT}°C)`)
-      : inAlertNow
-      ? '正常'
-      : '非警示時段';
-    if (s.stale) staleCount++;
-    c.now.textContent = deg(curVal);
+      c.el.classList.toggle('off', !s.configured);
+      c.el.classList.toggle('alert', isAlert);
+      c.flag.className = 'flag' + (s.stale || isAlert ? ' bad' : '');
+      c.flag.textContent = !s.configured
+        ? '尚未設定裝置'
+        : s.stale
+        ? '⚠ 資料中斷'
+        : recent
+        ? `${anomText(recent[A], sMin, sMax)} ${hm(recent[T])}`
+        : curOut
+        ? (curVal < sMin ? `▼ 過低 (<${sMin}°C)` : `▲ 過高 (>${sMax}°C)`)
+        : inAlertNow
+        ? '正常'
+        : '非警示時段';
+      if (s.stale) staleCount++;
+      c.now.textContent = deg(curVal);
 
-    // 卡片小圖只畫 07:30 ~ 18:00 之間的點位
-    const cardPts = pts.filter((p) => p[T] >= cardMinX && p[T] <= cardMaxX);
-    const coolMin = s.alarmCooldownMin || 30;
-    const alarmNote = s.lastAlarmAt && d.serverTime - s.lastAlarmAt < coolMin * 60000
-      ? ` · 🔔 ${hm(s.lastAlarmAt)} 已響 (${coolMin}分後再提醒)`
-      : '';
-    c.sub.textContent = (cardPts.length
-      ? `07:30~18:00 最低 ${Math.min(...cardPts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...cardPts.map((p) => p[MAX])).toFixed(1)} °C`
-      : pts.length
-      ? `今日 最低 ${Math.min(...pts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...pts.map((p) => p[MAX])).toFixed(1)} °C`
-      : '今日尚無資料 (07:00 開始記錄)') + alarmNote;
+      // 卡片小圖只畫 07:30 ~ 18:00 之間的點位
+      const cardPts = pts.filter((p) => p[T] >= cardMinX && p[T] <= cardMaxX);
+      const coolMin = s.alarmCooldownMin || 30;
+      const alarmNote = s.lastAlarmAt && d.serverTime - s.lastAlarmAt < coolMin * 60000
+        ? ` · 🔔 ${hm(s.lastAlarmAt)} 已響 (${coolMin}分後再提醒)`
+        : '';
+      c.sub.textContent = (cardPts.length
+        ? `07:30~18:00 最低 ${Math.min(...cardPts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...cardPts.map((p) => p[MAX])).toFixed(1)} °C`
+        : pts.length
+        ? `今日 最低 ${Math.min(...pts.map((p) => p[MIN])).toFixed(1)} ／ 最高 ${Math.max(...pts.map((p) => p[MAX])).toFixed(1)} °C`
+        : '今日尚無資料 (07:00 開始記錄)') + alarmNote;
 
-    c.chart.options.plugins.limitLines.minTemp = s.minTemp ?? minT;
-    c.chart.options.plugins.limitLines.maxTemp = s.maxTemp ?? maxT;
-    c.chart.options.plugins.limitLines.tzOffsetMin = tz;
-    c.chart.data.datasets[0].data = lineData(cardPts, d.stepMin);
-    c.chart.options.scales.x.min = cardMinX;
-    c.chart.options.scales.x.max = cardMaxX;
-    c.chart.update();
-    for (const p of pts) if (p[A]) anomalies.push({ p, lineId: line.id, line: line.name, sensor: s.name });
+      c.chart.options.plugins.limitLines.minTemp = sMin;
+      c.chart.options.plugins.limitLines.maxTemp = sMax;
+      c.chart.options.plugins.limitLines.tzOffsetMin = tz;
+      c.chart.data.datasets[0].data = lineData(cardPts, d.stepMin);
+      c.chart.options.scales.x.min = cardMinX;
+      c.chart.options.scales.x.max = cardMaxX;
+      c.chart.update();
+      for (const p of pts) if (p[A]) anomalies.push({ p, lineId: line.id, line: line.name, sensor: s.name, minT: sMin, maxT: sMax });
+    }
   }
 
   const st = $('status');
@@ -448,16 +504,19 @@ function render(d) {
     `</tr>`).join('');
 }
 
-// ---- 大曲線圖：一條產線的 3 個感測點畫在同一張圖 (今日 / 昨日 固定 07:00~19:00；本週顯示週一至週日) ----
+// ---- 大曲線圖：一條產線的 3 個感測點畫在同一張圖 (今日 / 昨日 / 指定日期 固定 07:00~19:00；本週顯示週一至週日) ----
 function renderBig(d) {
   const line = d.lines[0];
   if (!line) return;
-  const rItem = RANGES.find(([r]) => r === big.range) || RANGES[0];
-  const minT = d.minTemp ?? 45;
-  const maxT = d.maxTemp ?? 55;
-  $('bigTitle').textContent = `${line.name} — ${rItem[1]}（07:00 ~ 19:00）`;
-  $('bigNote').textContent = `紅虛線：標準範圍 ${minT}~${maxT}°C　｜　警示時段：07:30~11:20、12:30~18:30　｜　滑鼠移到曲線上可查看每分鐘溫度與狀態（${d.stepMin > 1 ? `每 ${d.stepMin} 分鐘一點` : '每分鐘一點'}）`;
+  const rItem = RANGES.find(([r]) => r === big.range);
+  const label = big.range === 'date' && big.date ? big.date : (rItem ? rItem[1] : '今日');
+  const minT = line.minTemp ?? d.minTemp ?? 45;
+  const maxT = line.maxTemp ?? d.maxTemp ?? 55;
+  const shoeTxt = line.shoeName ? ` · 鞋型：${line.shoeName}` : '';
+  $('bigTitle').textContent = `${line.name}${shoeTxt} — ${label}（07:00 ~ 19:00）`;
+  $('bigNote').textContent = `紅虛線：標準範圍 ${minT}~${maxT}°C　｜　警示時段：07:30~11:20、12:30~18:30　｜　歷史紀錄保存 ${d.retainDays || 90} 天　｜　滑鼠移到曲線上可查看每分鐘溫度（${d.stepMin > 1 ? `每 ${d.stepMin} 分鐘一點` : '每分鐘一點'}）`;
   [...$('bigRanges').children].forEach((b) => b.classList.toggle('on', b.dataset.range === big.range));
+  $('bigDate').value = big.range === 'date' ? big.date : '';
   if (!big.chart) {
     const sets = [];
     for (let i = 0; i < 3; i++) sets.push(lineSet('', color(i), 2));
@@ -481,17 +540,98 @@ function renderBig(d) {
 async function refreshBig() {
   if (!big.lineId || !$('big').open) return;
   try {
-    const r = await fetch(`/api/readings?range=${encodeURIComponent(big.range)}&line=${encodeURIComponent(big.lineId)}`, { cache: 'no-store' });
+    const q = big.range === 'date' && big.date ? `date=${encodeURIComponent(big.date)}` : `range=${encodeURIComponent(big.range)}`;
+    const r = await fetch(`/api/readings?${q}&line=${encodeURIComponent(big.lineId)}`, { cache: 'no-store' });
     renderBig(await r.json());
   } catch (e) { /* 主畫面的狀態列會顯示連線問題 */ }
 }
 
-function openBig(lineId, range) {
+function todayIso() {
+  const tz = (latestData?.tzOffsetMin ?? 420) * 60000;
+  return new Date((latestData?.serverTime || Date.now()) + tz).toISOString().slice(0, 10);
+}
+
+function openBig(lineId, range, dateStr = '') {
   big.lineId = lineId;
-  big.range = range || 'today';
+  if (range === 'pickdate') {
+    big.range = 'date';
+    big.date = dateStr || $('bigDate').value || todayIso();
+    $('bigDate').value = big.date;
+  } else if (range === 'date') {
+    big.range = 'date';
+    big.date = dateStr || todayIso();
+    $('bigDate').value = big.date;
+  } else {
+    big.range = range || 'today';
+    big.date = '';
+    $('bigDate').value = '';
+  }
   if (!$('big').open) $('big').showModal();
   refreshBig();
+  if (range === 'pickdate' && $('bigDate').showPicker) {
+    setTimeout(() => { try { $('bigDate').showPicker(); } catch (e) {} }, 80);
+  }
 }
+
+// ---- 鞋型與標準溫度設定視窗 (兼 RFID 卡號綁定) ----
+let editingLineId = null;
+function openShoeDlg(lineId) {
+  editingLineId = lineId;
+  const line = (latestData?.lines || []).find((l) => l.id === lineId);
+  if (!line) return;
+  $('shoeDlgTitle').textContent = `${line.name} — 設定生產鞋型與溫度標準`;
+  $('shoeNameInput').value = line.shoeName || '';
+  $('shoeMinInput').value = line.minTemp ?? latestData?.minTemp ?? 45;
+  $('shoeMaxInput').value = line.maxTemp ?? latestData?.maxTemp ?? 55;
+  $('shoeCardInput').value = line.cardUid || '';
+  const catalog = latestData?.shoeCatalog || [];
+  $('shoeSelect').innerHTML = '<option value="">— 手動輸入或選擇已存鞋型 —</option>' +
+    catalog.map((c, idx) => `<option value="${idx}">${esc(c.name)} (${c.minTemp}~${c.maxTemp}°C${c.cardUid ? ' · 卡:' + esc(c.cardUid) : ''})</option>`).join('');
+  const rfid = latestData?.lastRfid;
+  $('lastRfidNote').textContent = rfid
+    ? `最近一次讀卡機刷卡：卡號 ${rfid.cardUid}（${hm(rfid.at)}${rfid.matchedShoe ? ' → ' + rfid.matchedShoe : '，尚未綁定鞋型'}）`
+    : '提示：設定後，該產線的上下限紅虛線與警報門檻會立即更新，並自動存入常用鞋型配方。';
+  $('shoeDlg').showModal();
+}
+
+$('shoeSelect').addEventListener('change', (e) => {
+  const idx = e.target.value;
+  const item = (latestData?.shoeCatalog || [])[Number(idx)];
+  if (!item) return;
+  $('shoeNameInput').value = item.name;
+  $('shoeMinInput').value = item.minTemp;
+  $('shoeMaxInput').value = item.maxTemp;
+  $('shoeCardInput').value = item.cardUid || '';
+});
+$('useLastCardBtn').addEventListener('click', () => {
+  if (latestData?.lastRfid?.cardUid) $('shoeCardInput').value = latestData.lastRfid.cardUid;
+  else alert('目前還沒有收到 RFID 讀卡機刷卡紀錄，請先刷一次卡或直接手填卡號。');
+});
+$('shoeDlgClose').addEventListener('click', () => $('shoeDlg').close());
+$('shoeDlg').addEventListener('click', (e) => { if (e.target === $('shoeDlg')) $('shoeDlg').close(); });
+
+async function saveLineShoe(shoeName, minTemp, maxTemp, cardUid) {
+  if (!editingLineId) return;
+  const btn = $('shoeSaveBtn');
+  btn.disabled = true;
+  try {
+    await fetch('/api/preset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'setLine', line: editingLineId, shoeName, minTemp, maxTemp, cardUid }),
+    });
+    $('shoeDlg').close();
+    await refresh();
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('shoeSaveBtn').addEventListener('click', () => {
+  saveLineShoe($('shoeNameInput').value.trim(), Number($('shoeMinInput').value) || 45, Number($('shoeMaxInput').value) || 55, $('shoeCardInput').value.trim());
+});
+$('shoeResetBtn').addEventListener('click', () => {
+  saveLineShoe('', 45, 55, '');
+});
 
 $('lines').addEventListener('click', async (e) => {
   const ab = e.target.closest('button[data-alarm]');
@@ -512,12 +652,20 @@ $('lines').addEventListener('click', async (e) => {
     }
     return;
   }
+  const sb = e.target.closest('button[data-shoe-line]');
+  if (sb) {
+    openShoeDlg(sb.dataset.shoeLine);
+    return;
+  }
   const b = e.target.closest('button[data-line]');
   if (b) openBig(b.dataset.line, b.dataset.range);
 });
 $('bigRanges').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-range]');
   if (b) openBig(big.lineId, b.dataset.range);
+});
+$('bigDate').addEventListener('change', (e) => {
+  if (e.target.value) openBig(big.lineId, 'date', e.target.value);
 });
 // 點擊上方跑馬燈或下方異常紀錄表 → 直接跳出該產線的歷史大圖
 $('tickerTrack').addEventListener('click', (e) => {

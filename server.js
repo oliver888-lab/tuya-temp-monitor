@@ -99,21 +99,27 @@ const compact = (p, s) => [p.t, p.v, p.min, p.max, evalAnomalyCode(p.t, p.v, p.a
 const staleAfter = Math.max(3 * cfg.pollSec * 1000, 180_000);
 
 function resolveWindow(url, now) {
+  const dateStr = (url.searchParams.get('date') || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const day0 = Date.UTC(y, m - 1, d) - tzMs;
+    return { range: 'date', date: dateStr, since: day0 + 7 * 3600_000, until: day0 + 19 * 3600_000, hours: 12, stepMin: 1 };
+  }
   const range = url.searchParams.get('range') || '';
   const today0 = localDayStart(now);
-  if (range === 'today') return { range: 'today', since: today0 + 7 * 3600_000, until: today0 + 19 * 3600_000, hours: 12, stepMin: 1 };
+  if (range === 'today') return { range: 'today', date: '', since: today0 + 7 * 3600_000, until: today0 + 19 * 3600_000, hours: 12, stepMin: 1 };
   if (range === 'yesterday') {
     const y0 = today0 - DAY;
-    return { range: 'yesterday', since: y0 + 7 * 3600_000, until: y0 + 19 * 3600_000, hours: 12, stepMin: 1 };
+    return { range: 'yesterday', date: '', since: y0 + 7 * 3600_000, until: y0 + 19 * 3600_000, hours: 12, stepMin: 1 };
   }
   if (range === 'week') {
     const d = new Date(today0 + 12 * 3600_000);
     const dow = (d.getUTCDay() + 6) % 7;
     const mon0 = today0 - dow * DAY;
-    return { range: 'week', since: mon0 + 7 * 3600_000, until: mon0 + 6 * DAY + 19 * 3600_000, hours: 168, stepMin: 5 };
+    return { range: 'week', date: '', since: mon0 + 7 * 3600_000, until: mon0 + 6 * DAY + 19 * 3600_000, hours: 168, stepMin: 5 };
   }
   const hours = Math.min(Math.max(Number(url.searchParams.get('hours')) || 24, 0.25), Math.min(cfg.retainDays * 24, 168));
-  return { range: '', since: now - hours * 3600_000, until: now, hours, stepMin: hours > 24 ? 5 : 1 };
+  return { range: '', date: '', since: now - hours * 3600_000, until: now, hours, stepMin: hours > 24 ? 5 : 1 };
 }
 
 function readings(url) {
